@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+
+# Checkpoints (large model weights -- store separately)
+checkpoints/*/
+
+# Visualisation outputs (generated, not source)
+visualisation/*.html
+visualisation/*.glb
+visualisation/*.png
+visualisation/extra/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

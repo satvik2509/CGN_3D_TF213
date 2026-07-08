@@ -1,0 +1,8 @@
+name: cgn_tf213
+channels:
+  - conda-forge
+dependencies:
+  - python=3.9
+  - pip
+  - pip:
+      - -r requirements-tf213.txt
