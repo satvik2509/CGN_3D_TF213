@@ -1,5 +1,8 @@
-# TensorFlow 2.13.1 is the last 2.13 patch release for Python 3.9.
-tensorflow==2.13.1
+# TensorFlow 2.15.1 supports Python 3.9 and CUDA 12.x (A100 / sm_80).
+# It retains the tf.compat.v1.layers API required by this legacy graph; 2.16+
+# bundles Keras 3, which removes tf.layers.batch_normalization.
+# The ``and-cuda`` extra installs the matching CUDA runtime libraries.
+tensorflow[and-cuda]==2.15.1
 numpy==1.24.3
 scipy==1.10.1
 opencv-python-headless==4.8.1.78
@@ -7,3 +10,9 @@ PyYAML==6.0.2
 trimesh==4.4.9
 Pillow==10.4.0
 tqdm==4.66.5
+
+# Dependencies used by 3d_inference.py and the optional renderer.
+open3d==0.18.0
+plotly==5.24.1
+pyrender==0.1.45
+matplotlib==3.7.5

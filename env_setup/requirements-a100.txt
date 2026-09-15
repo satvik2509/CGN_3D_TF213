@@ -1,0 +1,8 @@
+# Python 3.9 + TensorFlow 2.15.1 stack for Contact-GraspNet inference on A100.
+# Install after activating the cgn_3d environment:
+#   python -m pip install -r requirements-a100.txt
+-r requirements-tf213.txt
+
+# Load CUDA 12.4 before compiling the PointNet++ operators:
+#   module load cuda/12.4
+# TensorFlow's ``and-cuda`` extra supplies the compatible CUDA runtime libraries.
