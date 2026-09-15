@@ -13,14 +13,15 @@ ICRA 2021
 
 ## Installation
 
-For H100/H200 inference, use Python 3.9, TensorFlow 2.13.1 and CUDA 11.8.
+For A100 inference, use Python 3.9, TensorFlow 2.15.1 and CUDA 12.4.
 The model remains in TensorFlow 1-compatible graph mode so the released
 checkpoints can be restored without changing variable names.
 
 ```shell
 conda env create -f environment-tf213.yml
-conda activate cgn_tf213
-CUDA_HOME=/usr/local/cuda-11.8 ./recompile_ops.sh
+conda activate cgn_3d
+module load cuda/12.4
+CUDA_HOME=/opt/cuda/12.4 ./recompile_ops.sh
 ```
 
 Confirm that TensorFlow can see the GPU before inference:
@@ -29,7 +30,7 @@ Confirm that TensorFlow can see the GPU before inference:
 python -c "import tensorflow as tf; print(tf.__version__, tf.config.list_physical_devices('GPU'))"
 ```
 
-The output must report TensorFlow 2.13.x and at least one GPU. The PointNet++
+The output must report TensorFlow 2.15.x and at least one GPU. The PointNet++
 sampling/grouping operators are GPU-only, so CPU inference is not supported.
 
 The original environment (Python 3.7/TensorFlow 2.2) is retained below for
@@ -50,6 +51,18 @@ sh compile_pointnet_tfops.sh
 ### Hardware
 Training: 1x Nvidia GPU >= 24GB VRAM, >=64GB RAM  
 Inference: 1x Nvidia GPU >= 8GB VRAM (might work with less)
+
+## Bill of Materials (2-Finger Gripper)
+
+Electronics/hardware required to build and drive the gripper (in addition to the 3D-printed parts in `gripper_models/`):
+
+| Component              | Qty | Notes                                  | Link |
+|--------------------------|-----|-----------------------------------------|------|
+| Arduino UNO             | 1   | Sends step/direction signals to DM542   | [Robu.in](https://robu.in/product/arduino-uno-r3/) |
+| DM542 stepper driver    | 1   | Drives the NEMA 17                      | [Robu.in](https://robu.in/product/dm542-digital-stepper-motor-driver-for-cnc-drivers-controller-3d-printer-accessories/) |
+| NEMA17 stepper motor (4.2 kg-cm, D-shaft) | 1 | Actuates the gripper fingers | [Robu.in](https://robu.in/product/nema17-pr42hs40-1204af-02-4-2kg-cm-stepper-motor-d-type-shaft/) |
+| Mean Well LRS-150-24 (24V, 6.5A, 156W SMPS) | 1 | Power supply for motor/driver | [Robu.in](https://robu.in/product/mean-well-lrs-150-24-24v-6-5a-156w-smps/) |
+| LM2596S buck converter (with SMD LED) | 1 (optional) | Steps down voltage for logic/peripherals if needed | [Robu.in](https://robu.in/product/lm2596s-with-smd-led-dc-dc-step-down-power-supply/) |
 
 ## Download Models and Data
 ### Model
