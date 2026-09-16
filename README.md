@@ -56,13 +56,14 @@ Inference: 1x Nvidia GPU >= 8GB VRAM (might work with less)
 
 Electronics/hardware required to build and drive the gripper (in addition to the 3D-printed parts in `2_finger_gripper_cad.3mf/`):
 
-| Component              | Qty | Notes                                  | Link |
-|--------------------------|-----|-----------------------------------------|------|
-| Arduino UNO             | 1   | Sends step/direction signals to DM542   | [Robu.in](https://robu.in/product/arduino-uno-r3/) |
-| DM542 stepper driver    | 1   | Drives the NEMA 17                      | [Robu.in](https://robu.in/product/dm542-digital-stepper-motor-driver-for-cnc-drivers-controller-3d-printer-accessories/) |
-| NEMA17 stepper motor (4.2 kg-cm, D-shaft) | 1 | Actuates the gripper fingers | [Robu.in](https://robu.in/product/nema17-pr42hs40-1204af-02-4-2kg-cm-stepper-motor-d-type-shaft/) |
-| Mean Well LRS-150-24 (24V, 6.5A, 156W SMPS) | 1 | Power supply for motor/driver | [Robu.in](https://robu.in/product/mean-well-lrs-150-24-24v-6-5a-156w-smps/) |
-| LM2596S buck converter (with SMD LED) | 1 (optional) | Steps down voltage for logic/peripherals if needed | [Robu.in](https://robu.in/product/lm2596s-with-smd-led-dc-dc-step-down-power-supply/) |
+| Component              | Qty | Cost (₹) | Notes                                  | Link |
+|--------------------------|-----|-----|-----------------------------------------|------|
+| Arduino UNO             | 1   | 413 | Sends step/direction signals to DM542   | [Robu.in](https://robu.in/product/arduino-uno-r3/) |
+| DM542 stepper driver    | 1   | 928 | Drives the NEMA 17                      | [Robu.in](https://robu.in/product/dm542-digital-stepper-motor-driver-for-cnc-drivers-controller-3d-printer-accessories/) |
+| NEMA17 stepper motor (4.2 kg-cm, D-shaft) | 1 | 776 | Actuates the gripper fingers | [Robu.in](https://robu.in/product/nema17-pr42hs40-1204af-02-4-2kg-cm-stepper-motor-d-type-shaft/) |
+| Mean Well LRS-150-24 (24V, 6.5A, 156W SMPS) | 1 | 1779 | Power supply for motor/driver | [Robu.in](https://robu.in/product/mean-well-lrs-150-24-24v-6-5a-156w-smps/) |
+| LM2596S buck converter (with SMD LED) | 1 (optional) | 45 | Steps down voltage for logic/peripherals if needed | [Robu.in](https://robu.in/product/lm2596s-with-smd-led-dc-dc-step-down-power-supply/) |
+| **Total** | | **₹3941** | | |
 
 ## Download Models and Data
 ### Model
