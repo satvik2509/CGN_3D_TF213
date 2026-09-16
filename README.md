@@ -54,7 +54,7 @@ Inference: 1x Nvidia GPU >= 8GB VRAM (might work with less)
 
 ## Bill of Materials (2-Finger Gripper)
 
-Electronics/hardware required to build and drive the gripper (in addition to the 3D-printed parts in `gripper_models/`):
+Electronics/hardware required to build and drive the gripper (in addition to the 3D-printed parts in `2_finger_gripper_cad.3mf/`):
 
 | Component              | Qty | Notes                                  | Link |
 |--------------------------|-----|-----------------------------------------|------|
