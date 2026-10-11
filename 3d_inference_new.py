@@ -132,6 +132,84 @@ def detect_table_robust(pcd, min_object_cluster_points=200, cluster_eps=0.02,
           f"outside the main object cluster ({object_mask.sum()} object points excluded from fitting)")
     return normal, d
 
+
+def _orient_table_toward_camera(normal, d):
+    """Flip the plane so the camera origin (0,0,0) lies on the above-table side."""
+    if d < 0:
+        return -normal, -d
+    return normal, d
+
+
+def detect_table_dominant_plane(pcd, distance_threshold=0.012, ransac_n=3,
+                                 num_iterations=2000, voxel_size=0.006,
+                                 min_inliers=800, min_inlier_ratio=0.06,
+                                 max_planes=3):
+    """
+    Fit the table as the dominant RANSAC plane in an RGB-D cloud.
+
+    This is the right prior for a RealSense tabletop capture: the table is
+    usually the largest planar surface. Cluster-first detection often fails
+    here because the object is physically connected to the table in the
+    depth image, so they form one DBSCAN blob.
+
+    Tries up to `max_planes` successive planes on a downsampled cloud and
+    keeps the one with the most inliers that still has objects sitting on
+    the camera-facing side.
+    """
+    points = np.asarray(pcd.points)
+    if len(points) < max(50, ransac_n):
+        print("Not enough points for dominant-plane table detection.")
+        return None, None
+
+    work = pcd.voxel_down_sample(voxel_size) if voxel_size and voxel_size > 0 else pcd
+    remaining = work
+    best = None
+
+    for plane_i in range(max_planes):
+        remaining_pts = np.asarray(remaining.points)
+        if len(remaining_pts) < max(50, ransac_n):
+            break
+        plane_model, inliers = remaining.segment_plane(
+            distance_threshold=distance_threshold,
+            ransac_n=ransac_n,
+            num_iterations=num_iterations,
+        )
+        n_inliers = len(inliers)
+        inlier_ratio = n_inliers / float(len(remaining_pts))
+        a, b, c, d = plane_model
+        normal = np.array([a, b, c], dtype=np.float64)
+        normal, d = normal / np.linalg.norm(normal), d / np.linalg.norm(normal)
+        normal, d = _orient_table_toward_camera(normal, d)
+
+        full_dists = points @ normal + d
+        n_full_inliers = int(np.sum(np.abs(full_dists) < distance_threshold))
+        above_frac = float(np.mean(full_dists > 0.01))
+
+        # Objects should sit on the camera side of a table, not a back wall
+        # that splits the cloud 50/50 with almost nothing "above" it.
+        objects_ok = 0.08 <= above_frac <= 0.95
+        enough = (n_inliers >= min_inliers) or (inlier_ratio >= min_inlier_ratio)
+        score = n_full_inliers * (1.0 if objects_ok else 0.15)
+
+        print(f"  RANSAC plane {plane_i}: inliers={n_inliers}/{len(remaining_pts)} "
+              f"({inlier_ratio*100:.1f}%), full-cloud inliers={n_full_inliers}, "
+              f"above-table={above_frac*100:.1f}%, score={score:.0f}")
+
+        if enough:
+            candidate = dict(normal=normal, d=d, score=score, n_full_inliers=n_full_inliers)
+            if best is None or candidate['score'] > best['score']:
+                best = candidate
+
+        remaining = remaining.select_by_index(inliers, invert=True)
+
+    if best is None:
+        print("Dominant-plane RANSAC did not find a usable table.")
+        return None, None
+
+    print(f"Table plane (dominant RANSAC): normal={best['normal']}, d={best['d']:.4f}, "
+          f"full-cloud inliers={best['n_full_inliers']}")
+    return best['normal'], best['d']
+
 # ----------------------------------------------------------------------------
 # Object segmentation via DBSCAN (no RGB/SAM needed -- purely geometric)
 # ----------------------------------------------------------------------------
@@ -367,7 +445,7 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
                      vis_floor_normal=None, vis_floor_d=None,
                      table_inlier_points=None,
                      require_all_points_above_z0=True,
-                     top_n=-1):
+                     top_n=-1, show_plane=False):
     print(f"Exporting 3D scene to {out_path}...")
 
     if len(pc) == 0:
@@ -445,26 +523,27 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
             mode='markers', marker=marker_dict, name='Full Point Cloud'
         ))
 
-    cx, cy = (pc[:, 0].min() + pc[:, 0].max()) / 2, (pc[:, 1].min() + pc[:, 1].max()) / 2
-    half_size = max(pc[:, 0].ptp(), pc[:, 1].ptp(), 0.2) * 4
-    x_range = np.linspace(cx - half_size, cx + half_size, 2)
-    y_range = np.linspace(cy - half_size, cy + half_size, 2)
-    xx, yy = np.meshgrid(x_range, y_range)
-    zz = np.zeros_like(xx)
-    fig.add_trace(go.Surface(
-        x=xx, y=yy, z=zz, opacity=1.0, showscale=False,
-        colorscale=[[0, 'saddlebrown'], [1, 'saddlebrown']], name='z=0 Plane'))
-
-    if table_normal is not None and table_d is not None:
-        extent_source = table_inlier_points if table_inlier_points is not None else pc
-        x_range = np.linspace(extent_source[:, 0].min(), extent_source[:, 0].max(), 2)
-        y_range = np.linspace(extent_source[:, 1].min(), extent_source[:, 1].max(), 2)
+    if show_plane:
+        cx, cy = (pc[:, 0].min() + pc[:, 0].max()) / 2, (pc[:, 1].min() + pc[:, 1].max()) / 2
+        half_size = max(pc[:, 0].ptp(), pc[:, 1].ptp(), 0.2) * 4
+        x_range = np.linspace(cx - half_size, cx + half_size, 2)
+        y_range = np.linspace(cy - half_size, cy + half_size, 2)
         xx, yy = np.meshgrid(x_range, y_range)
-        nz = table_normal[2] if abs(table_normal[2]) > 1e-6 else 1e-6
-        zz = (-table_d - table_normal[0]*xx - table_normal[1]*yy) / nz
+        zz = np.zeros_like(xx)
         fig.add_trace(go.Surface(
             x=xx, y=yy, z=zz, opacity=1.0, showscale=False,
-            colorscale=[[0, 'saddlebrown'], [1, 'saddlebrown']], name='Table Plane'))
+            colorscale=[[0, 'saddlebrown'], [1, 'saddlebrown']], name='z=0 Plane'))
+
+        if table_normal is not None and table_d is not None:
+            extent_source = table_inlier_points if table_inlier_points is not None else pc
+            x_range = np.linspace(extent_source[:, 0].min(), extent_source[:, 0].max(), 2)
+            y_range = np.linspace(extent_source[:, 1].min(), extent_source[:, 1].max(), 2)
+            xx, yy = np.meshgrid(x_range, y_range)
+            nz = table_normal[2] if abs(table_normal[2]) > 1e-6 else 1e-6
+            zz = (-table_d - table_normal[0]*xx - table_normal[1]*yy) / nz
+            fig.add_trace(go.Surface(
+                x=xx, y=yy, z=zz, opacity=1.0, showscale=False,
+                colorscale=[[0, 'saddlebrown'], [1, 'saddlebrown']], name='Table Plane'))
 
     gripper_lines = get_gripper_geometry()
     ctrl_pts = gripper_control_points_array()
@@ -554,16 +633,87 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
     print(f"Successfully saved {out_html}")
 
 
+def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
+                      score_threshold=0.23, min_clearance=0.005, standoff=0.10,
+                      vis_floor_normal=None, vis_floor_d=None,
+                      require_all_points_above_z0=True, top_n=-1,
+                      show_both_contacts=True):
+    """Open an interactive Mayavi view of the same filtered grasps as Plotly.
+
+    Mayavi is imported here rather than at module import time, so the normal
+    HTML-export workflow does not require a working X11/Qt display.
+    """
+    try:
+        from mayavi import mlab
+    except ImportError as exc:
+        raise RuntimeError(
+            "Mayavi is not installed in the active environment. Install it in "
+            "the Contact-GraspNet environment, then rerun with --mayavi."
+        ) from exc
+
+    print("Opening interactive Mayavi visualization (close its window to finish)...")
+    mlab.figure("Contact-GraspNet grasps", bgcolor=(0.08, 0.08, 0.08), size=(1200, 900))
+    mlab.points3d(pc[:, 0], pc[:, 1], pc[:, 2], color=(0.75, 0.75, 0.75),
+                  mode='point', scale_factor=0.001)
+
+    gripper_lines = get_gripper_geometry()
+    ctrl_pts = gripper_control_points_array()
+    n_shown = 0
+    for obj_id, grasps in pred_grasps_cam.items():
+        if len(grasps) == 0:
+            continue
+        n_shown_for_object = 0
+        for idx in np.argsort(scores[obj_id])[::-1]:
+            if scores[obj_id][idx] < score_threshold:
+                continue
+            g = grasps[idx]
+            pts_world = (g[:3, :3] @ ctrl_pts.T).T + g[:3, 3]
+            if vis_floor_normal is not None and vis_floor_d is not None:
+                if (pts_world @ vis_floor_normal + vis_floor_d).min() < min_clearance:
+                    continue
+                approach_dir = g[:3, 2]
+                pts_standoff = (g[:3, :3] @ ctrl_pts.T).T + (g[:3, 3] - standoff * approach_dir)
+                if (pts_standoff @ vis_floor_normal + vis_floor_d).min() < min_clearance:
+                    continue
+            if require_all_points_above_z0 and pts_world[:, 2].min() < 0.0:
+                continue
+            if top_n is not None and top_n > 0 and n_shown_for_object >= top_n:
+                continue
+
+            color = (1.0, 0.0, 0.0) if n_shown_for_object == 0 else (0.0, 0.9, 0.1)
+            for line in transform_lines(gripper_lines, g):
+                line = np.asarray(line)
+                mlab.plot3d(line[:, 0], line[:, 1], line[:, 2], color=color,
+                            tube_radius=0.0015, tube_sides=12)
+
+            obj_pairs = contact_pairs.get(obj_id) if contact_pairs is not None else None
+            if obj_pairs is not None and len(obj_pairs) > idx:
+                c1, c2 = obj_pairs[idx]
+                mlab.points3d(*c1, color=(0.0, 1.0, 1.0), mode='sphere', scale_factor=0.008)
+                if show_both_contacts:
+                    mlab.points3d(*c2, color=(1.0, 1.0, 0.0), mode='sphere', scale_factor=0.008)
+                    mlab.plot3d([c1[0], c2[0]], [c1[1], c2[1]], [c1[2], c2[2]],
+                                color=(1.0, 0.0, 1.0), tube_radius=0.0008)
+            n_shown_for_object += 1
+            n_shown += 1
+
+    print(f"Mayavi drew {n_shown} grasp(s).")
+    mlab.orientation_axes()
+    mlab.axes(xlabel='X (m)', ylabel='Y (m)', zlabel='Z (m)')
+    mlab.view(azimuth=180, elevation=70, distance='auto')
+    mlab.show()
+
+
 # ----------------------------------------------------------------------------
 # Main 3D pipeline
 # ----------------------------------------------------------------------------
-def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
+def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                        min_clearance=0.005, standoff=0.10, score_threshold=0.23,
                        show_both_contacts=True, out_path="visualisation/PLY_grasps.glb",
                        no_table=False, table_normal_override=None, table_d_override=None,
-                       top_n=-1):
-    print(f"\n--- Processing {ply_path} ---")
-    pcd = o3d.io.read_point_cloud(ply_path)
+                       top_n=-1, source_name="point cloud", table_method='robust',
+                       require_table=False, show_plane=False, mayavi=False):
+    print(f"\n--- Processing {source_name} ---")
     points = np.asarray(pcd.points)
     colors = np.asarray(pcd.colors) if pcd.has_colors() else None
     print(f"Loaded point cloud with {len(points)} points.")
@@ -580,24 +730,46 @@ def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
         table_d = table_d_override
         print(f"Using manual table plane override: normal={table_normal}, d={table_d:.4f}")
         outlier_cloud = pcd
+        all_dists = points @ table_normal + table_d
+        table_inlier_points = points[np.abs(all_dists) < 0.015]
+        object_mask = all_dists > 0.01
+        if object_mask.any() and (~object_mask).any():
+            outlier_cloud = pcd.select_by_index(np.where(object_mask)[0])
     elif no_table:
         table_normal, table_d = None, None
         outlier_cloud = pcd
     else:
-        table_normal, table_d = detect_table_robust(pcd)
+        table_normal, table_d = None, None
+        methods = ['dominant', 'robust'] if table_method == 'dominant' else ['robust', 'dominant']
+        for method in methods:
+            if table_normal is not None:
+                break
+            print(f"Detecting table via '{method}' method...")
+            if method == 'dominant':
+                table_normal, table_d = detect_table_dominant_plane(pcd)
+            else:
+                table_normal, table_d = detect_table_robust(pcd)
+
         if table_normal is None:
+            if require_table:
+                print("ERROR: table plane was not detected. Aborting grasp generation.")
+                return
             print("No reliable table plane found -- proceeding without collision filtering or plane overlay.")
             outlier_cloud = pcd
         else:
             all_dists = points @ table_normal + table_d
             object_mask = all_dists > 0.01
-            table_inlier_points = points[~object_mask]
+            # Supporting points are the planar band, not everything on the far
+            # side of the plane (walls / distant background would fail validation).
+            table_inlier_points = points[np.abs(all_dists) < 0.015]
             outlier_cloud = pcd.select_by_index(np.where(object_mask)[0])
             print(f"Total points: {len(points)}, above table plane: {object_mask.sum()} "
-                  f"({100*object_mask.mean():.1f}%)")
+                  f"({100*object_mask.mean():.1f}%), table-band inliers: {len(table_inlier_points)}")
 
     used_virtual_floor = False
     if table_normal is None:
+        if require_table:
+            return
         table_normal = np.array([0.0, 0.0, 1.0])
         table_d = -points[:, 2].min()
         used_virtual_floor = True
@@ -606,8 +778,12 @@ def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
 
     floor_is_solid = validate_floor_plane(
         table_normal, table_d,
-        table_points=table_inlier_points, is_virtual=used_virtual_floor
+        table_points=table_inlier_points, is_virtual=used_virtual_floor,
+        distance_threshold=0.015, min_inlier_frac=0.70, min_points=200
     )
+    if require_table and not floor_is_solid:
+        print("ERROR: detected table plane failed validation. Aborting grasp generation.")
+        return
 
     if len(outlier_cloud.points) == 0:
         print("Nothing left for object detection after excluding the table plane!")
@@ -701,7 +877,30 @@ def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
                      vis_floor_normal=vis_floor_normal, vis_floor_d=vis_floor_d,
                      table_inlier_points=table_inlier_points,
                      require_all_points_above_z0=True,
-                     top_n=top_n)
+                     top_n=top_n, show_plane=show_plane)
+    if mayavi:
+        show_mayavi_scene(full_points, pred_grasps_cam, scores, contact_pairs,
+                          score_threshold=score_threshold, min_clearance=min_clearance,
+                          standoff=standoff, vis_floor_normal=vis_floor_normal,
+                          vis_floor_d=vis_floor_d, require_all_points_above_z0=True,
+                          top_n=top_n, show_both_contacts=show_both_contacts)
+
+
+def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
+                       min_clearance=0.005, standoff=0.10, score_threshold=0.23,
+                       show_both_contacts=True, out_path="visualisation/PLY_grasps.glb",
+                       no_table=False, table_normal_override=None, table_d_override=None,
+                       top_n=-1, table_method='robust', require_table=False,
+                       show_plane=False, mayavi=False):
+    pcd = o3d.io.read_point_cloud(ply_path)
+    process_pcd_scene(sess, grasp_estimator, pcd, eps=eps, min_points=min_points,
+                      min_clearance=min_clearance, standoff=standoff,
+                      score_threshold=score_threshold,
+                      show_both_contacts=show_both_contacts, out_path=out_path,
+                      no_table=no_table, table_normal_override=table_normal_override,
+                      table_d_override=table_d_override, top_n=top_n,
+                      source_name=ply_path, table_method=table_method,
+                      require_table=require_table, show_plane=show_plane, mayavi=mayavi)
 
 
 def main():
@@ -740,6 +939,12 @@ def main():
     parser.add_argument('--table_d', type=float, default=None,
                          help='Manual table plane offset d override (used with --table_normal)')
 
+    parser.add_argument('--show_plane', action='store_true',
+                         help='Draw the z=0 floor plane and detected table plane in the 3D visualization '
+                              '(hidden by default)')
+    parser.add_argument('--mayavi', action='store_true',
+                        help='Also open an interactive Mayavi window (requires X11 forwarding on a server)')
+
     args = parser.parse_args()
 
     table_normal_override = None
@@ -771,7 +976,9 @@ def main():
                        no_table=args.no_table,
                        table_normal_override=table_normal_override,
                        table_d_override=args.table_d,
-                       top_n=args.top_n)
+                       top_n=args.top_n,
+                       show_plane=args.show_plane,
+                       mayavi=args.mayavi)
 
 
 if __name__ == '__main__':
