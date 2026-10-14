@@ -11,8 +11,8 @@ Usage:
 
 Saved per capture (in <out>/):
     rgb_XXXX.png        8-bit BGR color image
-    depth_XXXX.png      16-bit raw depth in sensor units (multiply by depth_scale -> meters)
-    depth_XXXX.npy      same raw depth as uint16 numpy array
+    depth_XXXX.png      16-bit filtered depth in sensor units (multiply by depth_scale -> meters)
+    depth_XXXX.npy      same filtered depth as uint16 numpy array
     intrinsics.json     color intrinsics, depth scale (saved once)
 """
 
@@ -37,11 +37,13 @@ def parse_args():
                    help="do not align depth to color (keeps native depth geometry)")
     p.add_argument("--warmup", type=int, default=30,
                    help="frames to discard so auto-exposure settles")
+    p.add_argument("--no-temporal-filter", action="store_true",
+                   help="disable temporal smoothing when the camera or scene is moving")
     return p.parse_args()
 
 
-def save_intrinsics(path, color_profile, depth_scale):
-    intr = color_profile.as_video_stream_profile().get_intrinsics()
+def save_intrinsics(path, camera_profile, depth_scale):
+    intr = camera_profile.as_video_stream_profile().get_intrinsics()
     data = {
         "width": intr.width,
         "height": intr.height,
@@ -81,26 +83,49 @@ def main():
 
     # Align depth to the color frame so pixels correspond 1:1
     align = None if args.no_align else rs.align(rs.stream.color)
+    to_disparity = rs.disparity_transform(True)
+    spatial_filter = rs.spatial_filter()
+    spatial_filter.set_option(rs.option.filter_magnitude, 2)
+    spatial_filter.set_option(rs.option.filter_smooth_alpha, 0.5)
+    spatial_filter.set_option(rs.option.filter_smooth_delta, 20)
+    temporal_filter = None
+    if not args.no_temporal_filter:
+        temporal_filter = rs.temporal_filter()
+        temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.4)
+        temporal_filter.set_option(rs.option.filter_smooth_delta, 20)
+    from_disparity = rs.disparity_transform(False)
 
     save_intrinsics(
         os.path.join(args.out, "intrinsics.json"),
-        profile.get_stream(rs.stream.color),
+        profile.get_stream(rs.stream.depth if args.no_align else rs.stream.color),
         depth_scale,
     )
 
-    # Let auto-exposure / white balance settle
+    def process_frames(frames):
+        if align is not None:
+            frames = align.process(frames)
+        depth_frame = frames.get_depth_frame()
+        if not depth_frame:
+            return frames, None
+        depth_frame = to_disparity.process(depth_frame)
+        depth_frame = spatial_filter.process(depth_frame)
+        if temporal_filter is not None:
+            depth_frame = temporal_filter.process(depth_frame)
+        depth_frame = from_disparity.process(depth_frame)
+        return frames, depth_frame
+
+    # Let auto-exposure and the temporal depth filter settle.
     for _ in range(args.warmup):
-        pipeline.wait_for_frames()
+        process_frames(pipeline.wait_for_frames())
+
+    temporal_status = "spatial + temporal" if temporal_filter is not None else "spatial"
+    print(f"Depth filtering enabled: edge-preserving {temporal_status} filters.")
 
     idx = len([f for f in os.listdir(args.out) if f.startswith("rgb_")])
 
     try:
         while True:
-            frames = pipeline.wait_for_frames()
-            if align is not None:
-                frames = align.process(frames)
-
-            depth_frame = frames.get_depth_frame()
+            frames, depth_frame = process_frames(pipeline.wait_for_frames())
             color_frame = frames.get_color_frame()
             if not depth_frame or not color_frame:
                 continue
@@ -113,7 +138,7 @@ def main():
                 print(f"Saved frame {idx} to {args.out}/")
                 break
 
-            # Preview only (the saved depth stays raw)
+            # Preview uses the same filtered depth that will be saved.
             depth_vis = cv2.applyColorMap(
                 cv2.convertScaleAbs(depth, alpha=0.03), cv2.COLORMAP_JET
             )

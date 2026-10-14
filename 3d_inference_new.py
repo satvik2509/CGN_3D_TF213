@@ -98,12 +98,28 @@ def detect_table_robust(pcd, min_object_cluster_points=200, cluster_eps=0.02,
     guarantees the plane can never be fit through the object itself -- unlike
     plane-first detection, which has no way to tell an object's flat face from
     an actual table.
+
+    Returns (None, None) with an explanatory message on every foreseeable
+    failure (sparse cloud, degenerate RANSAC, empty clusters, etc.) so the
+    caller always receives a clean signal to fall back gracefully.
     """
     points = np.asarray(pcd.points)
-    labels = np.array(pcd.cluster_dbscan(eps=cluster_eps, min_points=min_object_cluster_points,
-                                          print_progress=False))
-    if labels.max() < 0:
-        print("Could not find a dense object cluster; skipping table detection.")
+    if len(points) < max(remainder_min_points, ransac_n + 1):
+        print(f"detect_table_robust: cloud has only {len(points)} points -- "
+              "too sparse to attempt cluster-first table detection.")
+        return None, None
+
+    try:
+        labels = np.array(pcd.cluster_dbscan(eps=cluster_eps,
+                                              min_points=min_object_cluster_points,
+                                              print_progress=False))
+    except Exception as exc:
+        print(f"detect_table_robust: DBSCAN failed ({exc}); skipping.")
+        return None, None
+
+    if labels.size == 0 or labels.max() < 0:
+        print("detect_table_robust: no dense cluster found (all noise). "
+              "Skipping cluster-first table detection.")
         return None, None
 
     counts = np.bincount(labels[labels >= 0])
@@ -113,24 +129,41 @@ def detect_table_robust(pcd, min_object_cluster_points=200, cluster_eps=0.02,
 
     remainder_points = points[remainder_mask]
     if len(remainder_points) < remainder_min_points:
-        print(f"Only {len(remainder_points)} points remain outside the main object cluster -- "
-              f"not enough to reliably fit a table plane. Table detection skipped.")
+        print(f"detect_table_robust: only {len(remainder_points)} points remain outside "
+              f"the main object cluster (need >= {remainder_min_points}). "
+              "Not enough to fit a reliable table plane -- skipping.")
         return None, None
 
     remainder_pcd = pcd.select_by_index(np.where(remainder_mask)[0])
-    plane_model, inliers = remainder_pcd.segment_plane(distance_threshold=distance_threshold,
-                                                        ransac_n=ransac_n, num_iterations=num_iterations)
+    try:
+        plane_model, inliers = remainder_pcd.segment_plane(
+            distance_threshold=distance_threshold,
+            ransac_n=ransac_n,
+            num_iterations=num_iterations,
+        )
+    except Exception as exc:
+        print(f"detect_table_robust: RANSAC plane fit failed ({exc}); skipping.")
+        return None, None
+
     a, b, c, d = plane_model
     normal = np.array([a, b, c], dtype=np.float64)
-    normal, d = normal / np.linalg.norm(normal), d / np.linalg.norm(normal)
+    norm_len = np.linalg.norm(normal)
+    if norm_len < 1e-8:
+        print("detect_table_robust: RANSAC returned a degenerate (zero-norm) normal -- "
+              "likely too few/coplanar remainder points. Skipping.")
+        return None, None
+    normal, d = normal / norm_len, d / norm_len
 
-    obj_dists = points[object_mask] @ normal + d
-    if np.mean(obj_dists) < 0:
-        normal, d = -normal, -d
+    obj_pts = points[object_mask]
+    if len(obj_pts) > 0:
+        obj_dists = obj_pts @ normal + d
+        if np.mean(obj_dists) < 0:
+            normal, d = -normal, -d
 
     print(f"Table plane fit from {len(inliers)}/{len(remainder_points)} points "
           f"outside the main object cluster ({object_mask.sum()} object points excluded from fitting)")
     return normal, d
+
 
 
 def _orient_table_toward_camera(normal, d):
@@ -169,16 +202,30 @@ def detect_table_dominant_plane(pcd, distance_threshold=0.012, ransac_n=3,
         remaining_pts = np.asarray(remaining.points)
         if len(remaining_pts) < max(50, ransac_n):
             break
-        plane_model, inliers = remaining.segment_plane(
-            distance_threshold=distance_threshold,
-            ransac_n=ransac_n,
-            num_iterations=num_iterations,
-        )
+        try:
+            plane_model, inliers = remaining.segment_plane(
+                distance_threshold=distance_threshold,
+                ransac_n=ransac_n,
+                num_iterations=num_iterations,
+            )
+        except Exception as exc:
+            print(f"  RANSAC plane {plane_i}: fit failed ({exc}); stopping search.")
+            break
+
         n_inliers = len(inliers)
+        if n_inliers == 0:
+            print(f"  RANSAC plane {plane_i}: returned 0 inliers; stopping search.")
+            break
+
         inlier_ratio = n_inliers / float(len(remaining_pts))
         a, b, c, d = plane_model
         normal = np.array([a, b, c], dtype=np.float64)
-        normal, d = normal / np.linalg.norm(normal), d / np.linalg.norm(normal)
+        norm_len = np.linalg.norm(normal)
+        if norm_len < 1e-8:
+            print(f"  RANSAC plane {plane_i}: degenerate zero-norm normal; skipping candidate.")
+            remaining = remaining.select_by_index(inliers, invert=True)
+            continue
+        normal, d = normal / norm_len, d / norm_len
         normal, d = _orient_table_toward_camera(normal, d)
 
         full_dists = points @ normal + d
@@ -201,6 +248,7 @@ def detect_table_dominant_plane(pcd, distance_threshold=0.012, ransac_n=3,
                 best = candidate
 
         remaining = remaining.select_by_index(inliers, invert=True)
+
 
     if best is None:
         print("Dominant-plane RANSAC did not find a usable table.")
@@ -243,16 +291,21 @@ def validate_floor_plane(table_normal, table_d, table_points=None, is_virtual=Fa
     this and should not be trusted for real collision decisions.
 
     For a virtual/synthetic floor (is_virtual=True, e.g. z = object's own
-    z_min): there are no real points to check against -- it's flat and
-    solid by construction, so it always passes, but this is reported
-    explicitly so it's never confused with a genuinely measured surface.
+    z_min): there are no real points to validate against.  A synthetic floor
+    is NOT a measured surface, so it is treated as NOT solid: collision
+    filtering is disabled for the run, and a clear warning is printed.
 
-    Returns True/False and prints a clear, unambiguous verdict either way.
+    Returns True/False.  Only a REAL, well-supported, well-fitting plane
+    returns True.  Virtual floors always return False.
     """
     if is_virtual:
-        print(f"Floor plane check: VIRTUAL floor (normal={table_normal}, d={table_d:.4f}) -- "
-              f"flat and solid by construction, not measured from real points.")
-        return True
+        print(
+            f"Floor plane check: VIRTUAL floor (normal={table_normal}, d={table_d:.4f}) -- "
+            "this is a synthetic fallback, NOT measured from real points. "
+            "Collision filtering will be DISABLED to avoid false rejections against an "
+            "unmeasured surface."
+        )
+        return False  # synthetic floor must never drive collision decisions
 
     if table_points is None or len(table_points) < min_points:
         n = 0 if table_points is None else len(table_points)
@@ -633,12 +686,66 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
     print(f"Successfully saved {out_html}")
 
 
+def _reconstruct_mayavi_mesh(pc, pc_colors, use_bpa=False):
+    pcd_mesh = o3d.geometry.PointCloud()
+    pcd_mesh.points = o3d.utility.Vector3dVector(pc)
+    if pc_colors is not None and len(pc_colors) == len(pc):
+        colors = np.asarray(pc_colors)
+        if colors.size and colors.max() > 1.0:
+            colors = colors / 255.0
+        pcd_mesh.colors = o3d.utility.Vector3dVector(colors)
+
+    extent = float(np.ptp(np.asarray(pcd_mesh.points), axis=0).max())
+    voxel_size = max(extent / 80.0, 1e-4)
+    pcd_mesh = pcd_mesh.voxel_down_sample(voxel_size)
+    if len(pcd_mesh.points) < 10:
+        raise RuntimeError("Too few points remain after downsampling to reconstruct a mesh.")
+
+    pcd_mesh.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(
+            radius=voxel_size * 5, max_nn=30
+        )
+    )
+    pcd_mesh.orient_normals_consistent_tangent_plane(k=15)
+    if use_bpa:
+        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+            pcd_mesh,
+            o3d.utility.DoubleVector(
+                [voxel_size * 2, voxel_size * 4, voxel_size * 8]
+            ),
+        )
+        method_name = "BPA"
+    else:
+        mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+            pcd_mesh, depth=9, scale=1.1, linear_fit=False
+        )
+        densities = np.asarray(densities)
+        if len(densities) == len(mesh.vertices):
+            low_density = densities < np.quantile(densities, 0.02)
+            mesh.remove_vertices_by_mask(low_density)
+            mesh.remove_unreferenced_vertices()
+        method_name = "Poisson"
+
+    vertices = np.asarray(mesh.vertices)
+    triangles = np.asarray(mesh.triangles)
+    if len(triangles) < 10:
+        raise RuntimeError(
+            f"{method_name} reconstruction produced only {len(triangles)} faces; "
+            "cannot display a reliable mesh. Try a denser point cloud."
+        )
+
+    colors = np.asarray(mesh.vertex_colors) if mesh.has_vertex_colors() else None
+    if colors is not None and len(colors) != len(vertices):
+        colors = None
+    return vertices, triangles, colors
+
+
 def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
                       score_threshold=0.23, min_clearance=0.005, standoff=0.10,
                       vis_floor_normal=None, vis_floor_d=None,
                       require_all_points_above_z0=True, top_n=-1,
-                      show_both_contacts=True):
-    """Open an interactive Mayavi view of the same filtered grasps as Plotly.
+                      show_both_contacts=True, pc_colors=None, mesh=False, bpa=False):
+    """Open an interactive Mayavi view of the RGB scene and filtered grasps.
 
     Mayavi is imported here rather than at module import time, so the normal
     HTML-export workflow does not require a working X11/Qt display.
@@ -653,8 +760,59 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
 
     print("Opening interactive Mayavi visualization (close its window to finish)...")
     mlab.figure("Contact-GraspNet grasps", bgcolor=(0.08, 0.08, 0.08), size=(1200, 900))
-    mlab.points3d(pc[:, 0], pc[:, 1], pc[:, 2], color=(0.75, 0.75, 0.75),
-                  mode='point', scale_factor=0.001)
+    if mesh:
+        vertices, triangles, vertex_colors = _reconstruct_mayavi_mesh(
+            pc, pc_colors, use_bpa=bpa
+        )
+        if vertex_colors is None:
+            mlab.triangular_mesh(
+                vertices[:, 0], vertices[:, 1], vertices[:, 2], triangles,
+                color=(0.47, 0.71, 1.0), opacity=1.0,
+            )
+        else:
+            vertex_colors = np.clip(
+                np.rint(vertex_colors * 255.0), 0, 255
+            ).astype(np.uint8)
+            vertex_ids = np.arange(len(vertices), dtype=np.int32)
+            surface = mlab.triangular_mesh(
+                vertices[:, 0], vertices[:, 1], vertices[:, 2], triangles,
+                scalars=vertex_ids,
+            )
+            lut_manager = surface.module_manager.scalar_lut_manager
+            lut = lut_manager.lut
+            lut.number_of_colors = len(vertices)
+            lut._vtk_obj.SetTableRange(0, max(len(vertices) - 1, 1))
+            lut.table = np.column_stack(
+                (vertex_colors, np.full(len(vertices), 255, dtype=np.uint8))
+            ).astype(np.int32)
+            lut_manager.data_range = (0.0, float(max(len(vertices) - 1, 1)))
+        method_name = "BPA" if bpa else "Poisson"
+        print(f"Mayavi {method_name} mesh: {len(vertices)} vertices, {len(triangles)} faces.")
+    elif pc_colors is None:
+        mlab.points3d(pc[:, 0], pc[:, 1], pc[:, 2], color=(0.75, 0.75, 0.75),
+                      mode='point', scale_factor=0.001)
+    else:
+        colors = np.asarray(pc_colors)
+        if colors.shape != (len(pc), 3):
+            raise ValueError(
+                f"Expected one RGB color per point ({len(pc)}, 3), got {colors.shape}."
+            )
+        if np.issubdtype(colors.dtype, np.floating) and colors.size and colors.max() <= 1.0:
+            colors = colors * 255.0
+        colors = np.clip(np.rint(colors), 0, 255).astype(np.uint8)
+        point_ids = np.arange(len(pc), dtype=np.int32)
+        cloud_plot = mlab.points3d(
+            pc[:, 0], pc[:, 1], pc[:, 2], point_ids,
+            mode='point', scale_factor=0.001,
+        )
+        lut_manager = cloud_plot.module_manager.scalar_lut_manager
+        lut = lut_manager.lut
+        lut.number_of_colors = len(pc)
+        lut._vtk_obj.SetTableRange(0, max(len(pc) - 1, 1))
+        lut.table = np.column_stack(
+            (colors, np.full(len(pc), 255, dtype=np.uint8))
+        ).astype(np.int32)
+        lut_manager.data_range = (0.0, float(max(len(pc) - 1, 1)))
 
     gripper_lines = get_gripper_geometry()
     ctrl_pts = gripper_control_points_array()
@@ -712,7 +870,8 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                        show_both_contacts=True, out_path="visualisation/PLY_grasps.glb",
                        no_table=False, table_normal_override=None, table_d_override=None,
                        top_n=-1, source_name="point cloud", table_method='robust',
-                       require_table=False, show_plane=False, mayavi=False):
+                       require_table=False, show_plane=False, mayavi=False, mesh=False,
+                       bpa=False):
     print(f"\n--- Processing {source_name} ---")
     points = np.asarray(pcd.points)
     colors = np.asarray(pcd.colors) if pcd.has_colors() else None
@@ -729,12 +888,22 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
         table_normal = table_normal_override
         table_d = table_d_override
         print(f"Using manual table plane override: normal={table_normal}, d={table_d:.4f}")
-        outlier_cloud = pcd
         all_dists = points @ table_normal + table_d
         table_inlier_points = points[np.abs(all_dists) < 0.015]
-        object_mask = all_dists > 0.01
-        if object_mask.any() and (~object_mask).any():
-            outlier_cloud = pcd.select_by_index(np.where(object_mask)[0])
+        # Adaptive object mask: use points clearly on the dominant (above-table) side.
+        # The "above" side is defined as the side that contains more than half the cloud.
+        above_frac = float(np.mean(all_dists > 0))
+        sign = 1 if above_frac >= 0.5 else -1          # which sign has the bulk of the cloud?
+        clearance = float(np.percentile(np.abs(all_dists), 25)) + 0.005   # adaptive gap
+        clearance = max(clearance, 0.008)               # at least 8 mm above the surface
+        object_mask = (sign * all_dists) > clearance
+        if not object_mask.any():
+            print("Warning: adaptive object mask selected 0 points above the table plane. "
+                  "Falling back to all points outside the table band (|dist| > 0.005 m).")
+            object_mask = np.abs(all_dists) > 0.005
+        print(f"Override plane: {object_mask.sum()} points selected as object region "
+              f"(adaptive clearance={clearance*1000:.1f} mm, above_frac={above_frac*100:.1f}%)")
+        outlier_cloud = pcd.select_by_index(np.where(object_mask)[0])
     elif no_table:
         table_normal, table_d = None, None
         outlier_cloud = pcd
@@ -758,13 +927,33 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
             outlier_cloud = pcd
         else:
             all_dists = points @ table_normal + table_d
-            object_mask = all_dists > 0.01
+            # Adaptive object mask -- robust to walls, tilted camera, and unusual scenes.
+            # The above-table side is whichever side has less than 95 % of all points
+            # (a back wall behind the object would own nearly 100 %).
+            above_frac = float(np.mean(all_dists > 0))
+            # If the orientation looks backwards (camera is below the table),
+            # flip so the smaller, denser cluster is treated as "above".
+            if above_frac > 0.90:
+                table_normal, table_d = -table_normal, -table_d
+                all_dists = -all_dists
+                above_frac = 1.0 - above_frac
+                print("Flipped plane orientation (too many points on 'above' side; likely a wall).")
+            # Use a data-driven clearance: 25th percentile of positive distances + small gap.
+            pos_dists = all_dists[all_dists > 0]
+            clearance = (float(np.percentile(pos_dists, 25)) + 0.005) if len(pos_dists) > 10 else 0.010
+            clearance = max(clearance, 0.008)   # never less than 8 mm
+            object_mask = all_dists > clearance
             # Supporting points are the planar band, not everything on the far
             # side of the plane (walls / distant background would fail validation).
             table_inlier_points = points[np.abs(all_dists) < 0.015]
+            if not object_mask.any():
+                print("Warning: adaptive object mask selected 0 points. "
+                      "Falling back to all non-table-band points.")
+                object_mask = all_dists > 0.005
             outlier_cloud = pcd.select_by_index(np.where(object_mask)[0])
             print(f"Total points: {len(points)}, above table plane: {object_mask.sum()} "
-                  f"({100*object_mask.mean():.1f}%), table-band inliers: {len(table_inlier_points)}")
+                  f"({100*object_mask.mean():.1f}%), table-band inliers: {len(table_inlier_points)}, "
+                  f"adaptive clearance={clearance*1000:.1f} mm")
 
     used_virtual_floor = False
     if table_normal is None:
@@ -774,7 +963,7 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
         table_d = -points[:, 2].min()
         used_virtual_floor = True
         print(f"No real table detected -- using virtual floor plane at object z_min "
-              f"({points[:, 2].min():.4f}) for gripper-collision filtering.")
+              f"({points[:, 2].min():.4f}). Collision filtering will be disabled (virtual floor).")
 
     floor_is_solid = validate_floor_plane(
         table_normal, table_d,
@@ -788,12 +977,34 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
     if len(outlier_cloud.points) == 0:
         print("Nothing left for object detection after excluding the table plane!")
         return
-    cl, ind = outlier_cloud.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
-    outlier_cloud = outlier_cloud.select_by_index(ind)
+
+    # ---- Outlier removal (Issue 4 fix) ------------------------------------------
+    # Statistical outlier removal is skipped on small / thin-object clouds where it
+    # would delete real geometric structure before DBSCAN.  For larger clouds a
+    # gentler std_ratio is used and the number of removed points is always reported.
+    n_before = len(outlier_cloud.points)
+    outlier_cloud_pre_filter = outlier_cloud   # keep an explicit reference for recovery
+    _OUTLIER_MIN_CLOUD = 500   # skip if too few points to be statistically meaningful
+    if n_before >= _OUTLIER_MIN_CLOUD:
+        cl, ind = outlier_cloud.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.5)
+        outlier_cloud = outlier_cloud.select_by_index(ind)
+        n_after = len(outlier_cloud.points)
+        n_removed = n_before - n_after
+        print(f"Statistical outlier removal: {n_before} pts to {n_after} pts "
+              f"({n_removed} removed, std_ratio=2.5).")
+        if n_after == 0:
+            print("Warning: outlier removal deleted ALL points! Reverting to the "
+                  "pre-removal cloud (no outlier filtering for this run).")
+            outlier_cloud = outlier_cloud_pre_filter   # always valid; set just above
+    else:
+        print(f"Skipping statistical outlier removal: cloud has only {n_before} pts "
+              f"(threshold is {_OUTLIER_MIN_CLOUD}). Thin-object geometry preserved for DBSCAN.")
 
     pc_segments = segment_objects_3d(outlier_cloud, eps=eps, min_points=min_points)
     if len(pc_segments) == 0:
-        print("No object clusters found after DBSCAN!")
+        print(f"No object clusters found after DBSCAN "
+              f"(eps={eps}, min_points={min_points}, cloud size={len(outlier_cloud.points)}). "
+              "Try lowering --eps or --min_points, or check that the table was correctly removed.")
         return
 
     object_points_for_grasping = np.asarray(outlier_cloud.points)
@@ -811,13 +1022,29 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
     contact_pairs = snap_contact_pairs(pred_grasps_cam, contact_pts, gripper_openings, pc_segments)
 
     if floor_is_solid:
+        # ---- Step 1: hard filter -- remove grasps that deeply collide with the table
+        # and cannot plausibly be cleared by a small rotation (clearance < -standoff/2).
+        # These are intrinsically bad poses regardless of tilt correction.
+        HARD_COLLISION_THRESH = -standoff / 2.0  # deeply buried; no tilt will help
+        (pred_grasps_cam, scores,
+         contact_pts, gripper_openings,
+         contact_pairs) = filter_table_colliding_grasps(
+            pred_grasps_cam, scores, contact_pts, gripper_openings,
+            table_normal, table_d,
+            min_clearance=HARD_COLLISION_THRESH,   # negative: only reject deeply buried grasps
+            standoff=standoff,
+            contact_pairs=contact_pairs,
+        )
+
+        # ---- Step 2: for grasps that only slightly clip the table, try tilting them clear.
         pred_grasps_cam = resolve_floor_collisions_by_rotation(
             pred_grasps_cam, table_normal, table_d,
             min_clearance=min_clearance, standoff=standoff
         )
     else:
-        print("Skipping floor-collision rotation correction entirely -- floor plane "
-              "did not pass validation, so grasp poses below are UNCHECKED against it.")
+        print("Skipping floor-collision filtering entirely -- floor plane "
+              "did not pass validation (virtual or untrustworthy), "
+              "so grasp poses below are UNCHECKED against it.")
 
     print("\n" + "=" * 70)
     print("FINAL GRASP POSES (world frame, post floor-collision correction)")
@@ -883,7 +1110,8 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                           score_threshold=score_threshold, min_clearance=min_clearance,
                           standoff=standoff, vis_floor_normal=vis_floor_normal,
                           vis_floor_d=vis_floor_d, require_all_points_above_z0=True,
-                          top_n=top_n, show_both_contacts=show_both_contacts)
+                          top_n=top_n, show_both_contacts=show_both_contacts,
+                          pc_colors=full_colors, mesh=mesh, bpa=bpa)
 
 
 def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
@@ -891,7 +1119,7 @@ def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
                        show_both_contacts=True, out_path="visualisation/PLY_grasps.glb",
                        no_table=False, table_normal_override=None, table_d_override=None,
                        top_n=-1, table_method='robust', require_table=False,
-                       show_plane=False, mayavi=False):
+                       show_plane=False, mayavi=False, mesh=False, bpa=False):
     pcd = o3d.io.read_point_cloud(ply_path)
     process_pcd_scene(sess, grasp_estimator, pcd, eps=eps, min_points=min_points,
                       min_clearance=min_clearance, standoff=standoff,
@@ -900,7 +1128,8 @@ def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
                       no_table=no_table, table_normal_override=table_normal_override,
                       table_d_override=table_d_override, top_n=top_n,
                       source_name=ply_path, table_method=table_method,
-                      require_table=require_table, show_plane=show_plane, mayavi=mayavi)
+                      require_table=require_table, show_plane=show_plane, mayavi=mayavi,
+                      mesh=mesh, bpa=bpa)
 
 
 def main():
@@ -944,13 +1173,46 @@ def main():
                               '(hidden by default)')
     parser.add_argument('--mayavi', action='store_true',
                         help='Also open an interactive Mayavi window (requires X11 forwarding on a server)')
+    parser.add_argument('--mesh', action='store_true',
+                        help='Display a mesh instead of points in Mayavi (Screened Poisson by default); requires --mayavi')
+    parser.add_argument('--bpa', action='store_true',
+                        help='Use Ball Pivoting instead of Screened Poisson for the Mayavi mesh; requires --mesh')
+
+    parser.add_argument('--table_method', type=str, default='dominant',
+                         choices=['dominant', 'robust'],
+                         help='Table detection strategy: "dominant" (default) fits the largest RANSAC plane '
+                              '-- best for typical tabletop RGB-D captures; '
+                              '"robust" finds the main object cluster first then fits the remainder '
+                              '-- better when the object is large and clearly separated from the table.')
+    parser.add_argument('--require_table', action='store_true',
+                         help='Abort grasp generation if no valid table plane can be detected or validated. '
+                              'By default the script continues without collision filtering in that case.')
 
     args = parser.parse_args()
 
+    if args.mesh and not args.mayavi:
+        parser.error("--mesh requires --mayavi.")
+    if args.bpa and not args.mesh:
+        parser.error("--bpa requires --mesh.")
+
+    # ---- Manual plane override validation ----------------------------------------
+    # Both or neither must be supplied; one without the other is always a user error.
+    if (args.table_normal is None) != (args.table_d is None):
+        parser.error(
+            "--table_normal and --table_d must always be used together. "
+            "You supplied only one of the two; please re-run with both or neither."
+        )
+
     table_normal_override = None
-    if args.table_normal is not None and args.table_d is not None:
-        table_normal_override = np.array([float(v) for v in args.table_normal.split(',')])
-        table_normal_override = table_normal_override / np.linalg.norm(table_normal_override)
+    if args.table_normal is not None:
+        raw_normal = np.array([float(v) for v in args.table_normal.split(',')], dtype=np.float64)
+        norm_len = np.linalg.norm(raw_normal)
+        if norm_len < 1e-6:
+            parser.error(
+                f"--table_normal {args.table_normal!r} has near-zero magnitude ({norm_len:.2e}). "
+                "A zero vector cannot represent a plane normal. Please supply a non-zero normal."
+            )
+        table_normal_override = raw_normal / norm_len
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -977,8 +1239,12 @@ def main():
                        table_normal_override=table_normal_override,
                        table_d_override=args.table_d,
                        top_n=args.top_n,
+                       table_method=args.table_method,
+                       require_table=args.require_table,
                        show_plane=args.show_plane,
-                       mayavi=args.mayavi)
+                       mayavi=args.mayavi,
+                       mesh=args.mesh,
+                       bpa=args.bpa)
 
 
 if __name__ == '__main__':

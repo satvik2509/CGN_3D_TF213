@@ -1,0 +1,18 @@
+{
+  "include": [
+    "./",
+    "./contact_graspnet",
+    "./pointnet2"
+  ],
+  "extraPaths": [
+    "./",
+    "./contact_graspnet",
+    "./pointnet2",
+    "./pointnet2/utils"
+  ],
+  "typeCheckingMode": "off",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "venvPath": "/home/satvik/miniconda3/envs",
+  "venv": "cgn_3d"
+}

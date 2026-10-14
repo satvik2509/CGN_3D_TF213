@@ -105,6 +105,151 @@ python contact_graspnet/inference.py --np_path=/path/to/your/pc.npy \
 `--z_range` [min, max] z values in meter used to crop the input point cloud, e.g. to avoid grasps in the foreground/background(as above).  
 `--arg_configs TEST.second_thres:0.19 TEST.first_thres:0.23` Overwrite config confidence thresholds for successful grasp contacts to get more/less grasp proposals 
 
+---
+
+## 3D Point-Cloud Inference (`3d_inference_new.py`)
+
+A standalone pipeline that takes a raw `.ply` point cloud, automatically
+detects the table plane, segments objects with DBSCAN, runs Contact-GraspNet,
+and exports an interactive HTML visualisation. No depth map or segmentation
+mask is required.
+
+### Capturing and Rebuilding RealSense Point Clouds
+
+`scene_capture.py` applies edge-preserving spatial and temporal depth filters
+before saving frames. Keep the camera and scene still while capturing; use
+`--no-temporal-filter` if either is moving, to avoid temporal ghosting.
+
+```shell
+python scene_capture.py --out captures --warmup 30
+python rgbd_to_pc.py --captures captures
+```
+
+`rgbd_to_pc.py` only converts RGB-D frames to colored `.ply` point clouds; it
+does not load a checkpoint or run grasp inference. It converts all captures by
+default and writes `captures/pointclouds/scene_XXXX.ply`. Use
+`--index 0` to convert only one frame, or `--cloud_dir PATH` to select another
+output folder.
+
+The converter applies a 3-pixel edge-aware median filter by default, preserving
+invalid-depth holes and avoiding smoothing across depth discontinuities. It
+also projects detected table-plane points onto the fitted plane to reduce
+visible depth jitter on a known-flat table. Use `--depth_filter_kernel 0` to
+disable median filtering, `5` for stronger single-frame smoothing, or
+`--no-flatten-table` to keep the original table variation.
+
+### Quick Start
+
+```shell
+conda activate cgn_3d
+
+python 3d_inference_new.py \
+    --ply captures/my_scene.ply \
+    --out visualisation/my_scene_grasps.glb
+```
+
+This runs with all defaults: dominant-plane table detection, DBSCAN
+segmentation, table-collision filtering, and writes
+`visualisation/my_scene_grasps.html`.
+
+### All Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ply PATH` | *(required)* | Input `.ply` point cloud file |
+| `--ckpt_dir PATH` | `checkpoints/scene_test_2048_bs3_hor_sigma_001` | CGN checkpoint directory |
+| `--out PATH` | `visualisation/PLY_grasps.glb` | Output path; an `.html` file is written alongside |
+| `--eps FLOAT` | `0.02` | DBSCAN neighbourhood radius in metres |
+| `--min_points INT` | `30` | Minimum points per DBSCAN object cluster |
+| `--score_threshold FLOAT` | `0.23` | Minimum CGN confidence score to display (paper default) |
+| `--top_n INT` | `-1` (all) | Show only the top N grasps by score; `-1` shows every qualifying grasp |
+| `--min_clearance FLOAT` | `0.005` | Minimum gripper-to-table clearance in metres |
+| `--standoff FLOAT` | `0.10` | Distance (m) to back-check along the approach axis for collisions |
+| `--table_method` | `dominant` | Table detection strategy: `dominant` (RANSAC largest plane, best for typical tabletop RGB-D) or `robust` (cluster-first, better when the object is large and clearly separated) |
+| `--no_table` | off | Skip table detection entirely (disables collision filtering) |
+| `--require_table` | off | Abort if no valid table plane is found or validated |
+| `--table_normal X,Y,Z` | *(auto)* | Manually override the table normal, e.g. `0,0,1`. **Must be used together with `--table_d`** |
+| `--table_d FLOAT` | *(auto)* | Manually override the plane offset `d`. **Must be used together with `--table_normal`** |
+| `--show_plane` | off | Render the detected table plane and the z=0 floor in the visualisation |
+| `--single_contact` | off | Show only one antipodal contact point per grasp instead of both |
+| `--mayavi` | off | Also open an interactive Mayavi 3D window (requires X11/display); colored input clouds use their per-point RGB colors |
+| `--mesh` | off | With `--mayavi`, display a mesh instead of the default point cloud (Screened Poisson by default) |
+| `--bpa` | off | With `--mesh`, use Ball Pivoting instead of Screened Poisson reconstruction |
+
+### Common Recipes
+
+**Standard tabletop scene (recommended defaults):**
+```shell
+python 3d_inference_new.py --ply captures/scene.ply
+```
+
+**Show only the top 5 grasps with the table plane visible:**
+```shell
+python 3d_inference_new.py \
+    --ply captures/scene.ply \
+    --top_n 5 \
+    --show_plane
+```
+
+**Object is large / scene is cluttered — use robust table detection:**
+```shell
+python 3d_inference_new.py \
+    --ply captures/scene.ply \
+    --table_method robust
+```
+
+**Manually specify a known table plane (e.g. flat surface at z = -0.72 m):**
+```shell
+python 3d_inference_new.py \
+    --ply captures/scene.ply \
+    --table_normal 0,0,1 \
+    --table_d 0.72
+```
+> **Note:** `d` is the signed distance from the origin to the plane along the
+> normal. For a horizontal table at camera-frame z = 0.72 m below the camera,
+> the plane equation is `z = 0.72`, so `--table_d 0.72`.
+
+**Lower score threshold to get more grasp candidates:**
+```shell
+python 3d_inference_new.py \
+    --ply captures/scene.ply \
+    --score_threshold 0.15 \
+    --top_n 10
+```
+
+**Sparse or thin object — relax DBSCAN to avoid empty clusters:**
+```shell
+python 3d_inference_new.py \
+    --ply captures/scene.ply \
+    --eps 0.03 \
+    --min_points 15
+```
+
+**Abort if no reliable table is detected (strict mode):**
+```shell
+python 3d_inference_new.py \
+    --ply captures/scene.ply \
+    --require_table
+```
+
+### Outputs
+
+| File | Contents |
+|------|----------|
+| `<out>.html` | Interactive Plotly 3D scene (open in any browser) |
+| `<out>_grasp_poses.npz` | NumPy archive with `obj_ids`, `ranks`, `rotations` (Nx3x3), `translations` (Nx3) for the top-3 grasps per object |
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `No object clusters found after DBSCAN` | Lower `--eps` (e.g. `0.03`) or `--min_points` (e.g. `15`); check table was correctly subtracted with `--show_plane` |
+| `Dominant-plane RANSAC did not find a usable table` | Try `--table_method robust`, or supply a manual `--table_normal`/`--table_d` |
+| All grasps filtered out | Lower `--score_threshold`; check `--min_clearance` is not too large |
+| `--table_normal and --table_d must always be used together` | Supply both flags or neither — one without the other is an error |
+| Mesh reconstruction falls back to point cloud in HTML | Normal for very sparse captures; the HTML still shows all grasps correctly |
+
+
 
 ## Training
 
