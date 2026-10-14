@@ -400,7 +400,8 @@ def resolve_floor_collisions_by_rotation(pred_grasps_cam, table_normal, table_d,
     For any grasp whose gripper geometry collides with the floor plane, tilts
     the gripper by rotating about its OWN local x-axis (the baseline/closing
     direction) until it clears the floor -- instead of discarding the grasp.
-    Grasps that can't be resolved within max_angle_deg are left as-is.
+    Grasps that can't be resolved within max_angle_deg are left unchanged for
+    the final clearance filter to reject.
     """
     control_points = gripper_control_points_array()
     angles = np.arange(angle_step_deg, max_angle_deg + 1e-6, angle_step_deg)
@@ -442,7 +443,7 @@ def resolve_floor_collisions_by_rotation(pred_grasps_cam, table_normal, table_d,
 
         adjusted_grasps[obj_id] = grasps_out
         print(f"Object {obj_id}: {n_ok} clear, {n_adjusted} tilted to clear the floor, "
-              f"{n_unresolved} unresolved within {max_angle_deg} deg (left unchanged, none discarded)")
+              f"{n_unresolved} unresolved within {max_angle_deg} deg (pending final clearance filter)")
 
     return adjusted_grasps
 
@@ -498,7 +499,7 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
                      vis_floor_normal=None, vis_floor_d=None,
                      table_inlier_points=None,
                      require_all_points_above_z0=True,
-                     top_n=-1, show_plane=False):
+                     top_n=-1, show_plane=False, camera_location=None):
     print(f"Exporting 3D scene to {out_path}...")
 
     if len(pc) == 0:
@@ -509,33 +510,13 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
 
     mesh_added = False
     try:
-        pc_vis = pc
-        colors_vis = pc_colors
-
-        pcd_mesh = o3d.geometry.PointCloud()
-        pcd_mesh.points = o3d.utility.Vector3dVector(pc_vis)
-        if colors_vis is not None and len(colors_vis) == len(pc_vis):
-            cv = colors_vis if np.max(colors_vis) <= 1.0 else colors_vis / 255.0
-            pcd_mesh.colors = o3d.utility.Vector3dVector(cv)
-
-        voxel_size = (np.asarray(pcd_mesh.points).ptp(axis=0).max()) / 80
-        pcd_mesh = pcd_mesh.voxel_down_sample(voxel_size=max(voxel_size, 1e-4))
-        pcd_mesh.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=voxel_size * 5, max_nn=30))
-        pcd_mesh.orient_normals_consistent_tangent_plane(k=15)
-
-        pts_ds = np.asarray(pcd_mesh.points)
-        radii = [voxel_size * 2, voxel_size * 4, voxel_size * 8]
-        mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
-            pcd_mesh, o3d.utility.DoubleVector(radii)
+        vertices, triangles, vertex_colors = _reconstruct_scene_mesh(
+            pc, pc_colors, use_bpa=True, camera_location=camera_location
         )
 
-        triangles = np.asarray(mesh.triangles)
-        vertices  = np.asarray(mesh.vertices)
-        vtx_colors = np.asarray(mesh.vertex_colors) if mesh.has_vertex_colors() else None
-
         if len(triangles) >= 10:
-            if vtx_colors is not None and len(vtx_colors) == len(vertices):
-                vc255 = (vtx_colors * 255).astype(int)
+            if vertex_colors is not None and len(vertex_colors) == len(vertices):
+                vc255 = (vertex_colors * 255).astype(int)
                 vertex_color_strs = [f'rgb({r},{g},{b})' for r, g, b in vc255]
             else:
                 vertex_color_strs = ['rgb(120,180,255)'] * len(vertices)
@@ -550,8 +531,6 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
             ))
             mesh_added = True
             print(f"Mesh rendered: {len(vertices)} vertices, {len(triangles)} faces.")
-        else:
-            print(f"BPA produced only {len(triangles)} face(s) -- falling back to point cloud.")
     except Exception as e:
         print(f"Mesh reconstruction failed ({e}) -- falling back to point cloud.")
 
@@ -680,22 +659,32 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
         title='3D Grasp Visualization (Red = Top Grasp, ALL floor-clear + z>=0 grasps shown)'
     )
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    out_html = out_path.replace('.glb', '.html')
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    out_html = os.path.splitext(out_path)[0] + '.html'
     fig.write_html(out_html)
     print(f"Successfully saved {out_html}")
 
 
-def _reconstruct_mayavi_mesh(pc, pc_colors, use_bpa=False):
+def _reconstruct_scene_mesh(pc, pc_colors, use_bpa=False, camera_location=None):
+    points = np.asarray(pc, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 10:
+        raise ValueError(f"Mesh reconstruction needs at least 10 Nx3 points; got {points.shape}.")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("Mesh reconstruction input contains non-finite points.")
+
     pcd_mesh = o3d.geometry.PointCloud()
-    pcd_mesh.points = o3d.utility.Vector3dVector(pc)
-    if pc_colors is not None and len(pc_colors) == len(pc):
+    pcd_mesh.points = o3d.utility.Vector3dVector(points)
+    if pc_colors is not None:
         colors = np.asarray(pc_colors)
+        if colors.shape != points.shape or not np.all(np.isfinite(colors)):
+            raise ValueError("Mesh colors must be finite RGB values, one row per point.")
         if colors.size and colors.max() > 1.0:
             colors = colors / 255.0
         pcd_mesh.colors = o3d.utility.Vector3dVector(colors)
 
-    extent = float(np.ptp(np.asarray(pcd_mesh.points), axis=0).max())
+    extent = float(np.ptp(points, axis=0).max())
+    if not np.isfinite(extent) or extent <= 0:
+        raise ValueError("Mesh reconstruction input has no finite spatial extent.")
     voxel_size = max(extent / 80.0, 1e-4)
     pcd_mesh = pcd_mesh.voxel_down_sample(voxel_size)
     if len(pcd_mesh.points) < 10:
@@ -706,7 +695,17 @@ def _reconstruct_mayavi_mesh(pc, pc_colors, use_bpa=False):
             radius=voxel_size * 5, max_nn=30
         )
     )
-    pcd_mesh.orient_normals_consistent_tangent_plane(k=15)
+    if camera_location is None:
+        camera_location = np.zeros(3, dtype=np.float64)
+    camera_location = np.asarray(camera_location, dtype=np.float64)
+    if camera_location.shape != (3,) or not np.all(np.isfinite(camera_location)):
+        raise ValueError("Camera location for normal orientation must be a finite 3-vector.")
+    pcd_mesh.orient_normals_towards_camera_location(camera_location)
+    normals = np.asarray(pcd_mesh.normals)
+    if (len(normals) != len(pcd_mesh.points) or not np.all(np.isfinite(normals))
+            or np.any(np.linalg.norm(normals, axis=1) < 1e-8)):
+        raise RuntimeError("Normal estimation produced invalid normals.")
+
     if use_bpa:
         mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
             pcd_mesh,
@@ -724,6 +723,18 @@ def _reconstruct_mayavi_mesh(pc, pc_colors, use_bpa=False):
             low_density = densities < np.quantile(densities, 0.02)
             mesh.remove_vertices_by_mask(low_density)
             mesh.remove_unreferenced_vertices()
+        mesh_vertex_cloud = o3d.geometry.PointCloud()
+        mesh_vertex_cloud.points = o3d.utility.Vector3dVector(
+            np.asarray(mesh.vertices)
+        )
+        support_distances = np.asarray(
+            mesh_vertex_cloud.compute_point_cloud_distance(pcd_mesh)
+        )
+        if len(support_distances) == len(mesh.vertices):
+            unsupported = support_distances > voxel_size * 2.5
+            mesh.remove_vertices_by_mask(unsupported)
+            mesh.remove_unreferenced_vertices()
+        mesh = mesh.crop(pcd_mesh.get_axis_aligned_bounding_box())
         method_name = "Poisson"
 
     vertices = np.asarray(mesh.vertices)
@@ -744,7 +755,8 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
                       score_threshold=0.23, min_clearance=0.005, standoff=0.10,
                       vis_floor_normal=None, vis_floor_d=None,
                       require_all_points_above_z0=True, top_n=-1,
-                      show_both_contacts=True, pc_colors=None, mesh=False, bpa=False):
+                      show_both_contacts=True, pc_colors=None, mesh=False, bpa=False,
+                      camera_location=None):
     """Open an interactive Mayavi view of the RGB scene and filtered grasps.
 
     Mayavi is imported here rather than at module import time, so the normal
@@ -761,58 +773,42 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
     print("Opening interactive Mayavi visualization (close its window to finish)...")
     mlab.figure("Contact-GraspNet grasps", bgcolor=(0.08, 0.08, 0.08), size=(1200, 900))
     if mesh:
-        vertices, triangles, vertex_colors = _reconstruct_mayavi_mesh(
-            pc, pc_colors, use_bpa=bpa
-        )
-        if vertex_colors is None:
-            mlab.triangular_mesh(
-                vertices[:, 0], vertices[:, 1], vertices[:, 2], triangles,
-                color=(0.47, 0.71, 1.0), opacity=1.0,
+        try:
+            vertices, triangles, vertex_colors = _reconstruct_scene_mesh(
+                pc, pc_colors, use_bpa=bpa, camera_location=camera_location
             )
-        else:
-            vertex_colors = np.clip(
-                np.rint(vertex_colors * 255.0), 0, 255
-            ).astype(np.uint8)
-            vertex_ids = np.arange(len(vertices), dtype=np.int32)
-            surface = mlab.triangular_mesh(
-                vertices[:, 0], vertices[:, 1], vertices[:, 2], triangles,
-                scalars=vertex_ids,
-            )
-            lut_manager = surface.module_manager.scalar_lut_manager
-            lut = lut_manager.lut
-            lut.number_of_colors = len(vertices)
-            lut._vtk_obj.SetTableRange(0, max(len(vertices) - 1, 1))
-            lut.table = np.column_stack(
-                (vertex_colors, np.full(len(vertices), 255, dtype=np.uint8))
-            ).astype(np.int32)
-            lut_manager.data_range = (0.0, float(max(len(vertices) - 1, 1)))
-        method_name = "BPA" if bpa else "Poisson"
-        print(f"Mayavi {method_name} mesh: {len(vertices)} vertices, {len(triangles)} faces.")
-    elif pc_colors is None:
-        mlab.points3d(pc[:, 0], pc[:, 1], pc[:, 2], color=(0.75, 0.75, 0.75),
-                      mode='point', scale_factor=0.001)
+            if vertex_colors is None:
+                mlab.triangular_mesh(
+                    vertices[:, 0], vertices[:, 1], vertices[:, 2], triangles,
+                    color=(0.47, 0.71, 1.0), opacity=1.0,
+                )
+            else:
+                vertex_colors = np.clip(
+                    np.rint(vertex_colors * 255.0), 0, 255
+                ).astype(np.uint8)
+                vertex_ids = np.arange(len(vertices), dtype=np.int32)
+                surface = mlab.triangular_mesh(
+                    vertices[:, 0], vertices[:, 1], vertices[:, 2], triangles,
+                    scalars=vertex_ids,
+                )
+                lut_manager = surface.module_manager.scalar_lut_manager
+                lut = lut_manager.lut
+                lut.number_of_colors = len(vertices)
+                lut._vtk_obj.SetTableRange(0, max(len(vertices) - 1, 1))
+                lut.table = np.column_stack(
+                    (vertex_colors, np.full(len(vertices), 255, dtype=np.uint8))
+                ).astype(np.int32)
+                lut_manager.data_range = (0.0, float(max(len(vertices) - 1, 1)))
+            method_name = "BPA" if bpa else "Poisson"
+            print(f"Mayavi {method_name} mesh: {len(vertices)} vertices, {len(triangles)} faces.")
+        except Exception as exc:
+            print(f"Mayavi mesh reconstruction/rendering failed ({exc}); "
+                  "falling back to the colored point cloud.")
+            mlab.clf()
+            mlab.figure("Contact-GraspNet grasps", bgcolor=(0.08, 0.08, 0.08), size=(1200, 900))
+            _draw_mayavi_point_cloud(mlab, pc, pc_colors)
     else:
-        colors = np.asarray(pc_colors)
-        if colors.shape != (len(pc), 3):
-            raise ValueError(
-                f"Expected one RGB color per point ({len(pc)}, 3), got {colors.shape}."
-            )
-        if np.issubdtype(colors.dtype, np.floating) and colors.size and colors.max() <= 1.0:
-            colors = colors * 255.0
-        colors = np.clip(np.rint(colors), 0, 255).astype(np.uint8)
-        point_ids = np.arange(len(pc), dtype=np.int32)
-        cloud_plot = mlab.points3d(
-            pc[:, 0], pc[:, 1], pc[:, 2], point_ids,
-            mode='point', scale_factor=0.001,
-        )
-        lut_manager = cloud_plot.module_manager.scalar_lut_manager
-        lut = lut_manager.lut
-        lut.number_of_colors = len(pc)
-        lut._vtk_obj.SetTableRange(0, max(len(pc) - 1, 1))
-        lut.table = np.column_stack(
-            (colors, np.full(len(pc), 255, dtype=np.uint8))
-        ).astype(np.int32)
-        lut_manager.data_range = (0.0, float(max(len(pc) - 1, 1)))
+        _draw_mayavi_point_cloud(mlab, pc, pc_colors)
 
     gripper_lines = get_gripper_geometry()
     ctrl_pts = gripper_control_points_array()
@@ -860,6 +856,34 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
     mlab.axes(xlabel='X (m)', ylabel='Y (m)', zlabel='Z (m)')
     mlab.view(azimuth=180, elevation=70, distance='auto')
     mlab.show()
+
+
+def _draw_mayavi_point_cloud(mlab, pc, pc_colors):
+    if pc_colors is None:
+        mlab.points3d(pc[:, 0], pc[:, 1], pc[:, 2], color=(0.75, 0.75, 0.75),
+                      mode='point', scale_factor=0.001)
+    else:
+        colors = np.asarray(pc_colors)
+        if colors.shape != (len(pc), 3):
+            raise ValueError(
+                f"Expected one RGB color per point ({len(pc)}, 3), got {colors.shape}."
+            )
+        if np.issubdtype(colors.dtype, np.floating) and colors.size and colors.max() <= 1.0:
+            colors = colors * 255.0
+        colors = np.clip(np.rint(colors), 0, 255).astype(np.uint8)
+        point_ids = np.arange(len(pc), dtype=np.int32)
+        cloud_plot = mlab.points3d(
+            pc[:, 0], pc[:, 1], pc[:, 2], point_ids,
+            mode='point', scale_factor=0.001,
+        )
+        lut_manager = cloud_plot.module_manager.scalar_lut_manager
+        lut = lut_manager.lut
+        lut.number_of_colors = len(pc)
+        lut._vtk_obj.SetTableRange(0, max(len(pc) - 1, 1))
+        lut.table = np.column_stack(
+            (colors, np.full(len(pc), 255, dtype=np.uint8))
+        ).astype(np.int32)
+        lut_manager.data_range = (0.0, float(max(len(pc) - 1, 1)))
 
 
 # ----------------------------------------------------------------------------
@@ -1041,10 +1065,22 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
             pred_grasps_cam, table_normal, table_d,
             min_clearance=min_clearance, standoff=standoff
         )
+        # Rotation may fail to resolve a collision. Never save those grasps as
+        # if they were safe; recheck final pose and approach clearance together.
+        (pred_grasps_cam, scores,
+         contact_pts, gripper_openings,
+         contact_pairs) = filter_table_colliding_grasps(
+            pred_grasps_cam, scores, contact_pts, gripper_openings,
+            table_normal, table_d,
+            min_clearance=min_clearance,
+            standoff=standoff,
+            contact_pairs=contact_pairs,
+        )
+        print("Applied final table-clearance validation after rotation correction.")
     else:
         print("Skipping floor-collision filtering entirely -- floor plane "
               "did not pass validation (virtual or untrustworthy), "
-              "so grasp poses below are UNCHECKED against it.")
+              "so grasp poses below are UNCHECKED against it and will be marked as such.")
 
     print("\n" + "=" * 70)
     print("FINAL GRASP POSES (world frame, post floor-collision correction)")
@@ -1066,19 +1102,30 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
             print(f"\nObject {obj_id}, grasp rank {top3_rank+1}:")
             print(f"  Rotation R =\n{R}")
             print(f"  Translation t = {t}")
-            grasp_pose_records.append({'obj_id': obj_id, 'rank': top3_rank, 'R': R.copy(), 't': t.copy()})
+            grasp_pose_records.append({
+                'obj_id': obj_id,
+                'rank': top3_rank,
+                'R': R.copy(),
+                't': t.copy(),
+                'collision_checked': floor_is_solid,
+            })
             top3_rank += 1
     print("=" * 70 + "\n")
 
     if grasp_pose_records:
         poses_out_path = os.path.splitext(out_path)[0] + "_grasp_poses.npz"
-        os.makedirs(os.path.dirname(poses_out_path), exist_ok=True)
+        os.makedirs(os.path.dirname(poses_out_path) or ".", exist_ok=True)
         np.savez(poses_out_path,
                  obj_ids=np.array([r['obj_id'] for r in grasp_pose_records]),
                  ranks=np.array([r['rank'] for r in grasp_pose_records]),
                  rotations=np.stack([r['R'] for r in grasp_pose_records]),
-                 translations=np.stack([r['t'] for r in grasp_pose_records]))
-        print(f"Saved {len(grasp_pose_records)} grasp pose(s) (R, t) to {poses_out_path}")
+                 translations=np.stack([r['t'] for r in grasp_pose_records]),
+                 table_collision_checked=np.array(
+                     [r['collision_checked'] for r in grasp_pose_records], dtype=bool
+                 ),
+                 minimum_table_clearance_m=np.array(min_clearance, dtype=np.float64))
+        print(f"Saved {len(grasp_pose_records)} grasp pose(s) (R, t) to {poses_out_path}; "
+              f"table collision checked: {floor_is_solid}.")
 
     z_offset = -full_points[:, 2].min()
     shift = np.array([0.0, 0.0, z_offset])
@@ -1104,14 +1151,16 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                      vis_floor_normal=vis_floor_normal, vis_floor_d=vis_floor_d,
                      table_inlier_points=table_inlier_points,
                      require_all_points_above_z0=True,
-                     top_n=top_n, show_plane=show_plane)
+                     top_n=top_n, show_plane=show_plane,
+                     camera_location=shift)
     if mayavi:
         show_mayavi_scene(full_points, pred_grasps_cam, scores, contact_pairs,
                           score_threshold=score_threshold, min_clearance=min_clearance,
                           standoff=standoff, vis_floor_normal=vis_floor_normal,
                           vis_floor_d=vis_floor_d, require_all_points_above_z0=True,
                           top_n=top_n, show_both_contacts=show_both_contacts,
-                          pc_colors=full_colors, mesh=mesh, bpa=bpa)
+                          pc_colors=full_colors, mesh=mesh, bpa=bpa,
+                          camera_location=shift)
 
 
 def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
@@ -1205,14 +1254,24 @@ def main():
 
     table_normal_override = None
     if args.table_normal is not None:
-        raw_normal = np.array([float(v) for v in args.table_normal.split(',')], dtype=np.float64)
+        try:
+            raw_normal = np.array(
+                [float(v.strip()) for v in args.table_normal.split(',')],
+                dtype=np.float64,
+            )
+        except ValueError:
+            parser.error("--table_normal must contain exactly three comma-separated finite numbers.")
+        if raw_normal.shape != (3,) or not np.all(np.isfinite(raw_normal)):
+            parser.error("--table_normal must contain exactly three comma-separated finite numbers.")
         norm_len = np.linalg.norm(raw_normal)
-        if norm_len < 1e-6:
+        if not np.isfinite(norm_len) or norm_len < 1e-6:
             parser.error(
-                f"--table_normal {args.table_normal!r} has near-zero magnitude ({norm_len:.2e}). "
-                "A zero vector cannot represent a plane normal. Please supply a non-zero normal."
+                f"--table_normal {args.table_normal!r} has zero, near-zero, or non-finite magnitude. "
+                "Please supply a finite non-zero normal."
             )
         table_normal_override = raw_normal / norm_len
+        if not np.isfinite(args.table_d):
+            parser.error("--table_d must be finite.")
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True

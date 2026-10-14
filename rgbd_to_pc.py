@@ -8,11 +8,12 @@ Reads RealSense-style files from a capture folder:
     intrinsics.json
 
 Back-projects each frame into a colored point cloud and writes one PLY file
-per frame. By default, all captures are converted into captures/pointclouds/.
+per frame. By default, all captures are converted into
+scenes_11_10_26/pointclouds/.
 
 Example:
     python rgbd_to_pc.py
-    python rgbd_to_pc.py --captures captures --index 0
+    python rgbd_to_pc.py --captures scenes_11_10_26 --index 0
 """
 
 import argparse
@@ -176,7 +177,7 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="Convert RGB-D captures to colored PLY point clouds"
     )
-    p.add_argument("--captures", type=str, default="captures",
+    p.add_argument("--captures", type=str, default="scenes_11_10_26",
                    help="Folder with rgb_XXXX.png, depth_XXXX.npy, and intrinsics.json")
     p.add_argument("--index", type=int, default=None,
                    help="Process only this capture index (default: all frames)")

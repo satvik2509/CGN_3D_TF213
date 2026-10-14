@@ -121,13 +121,13 @@ before saving frames. Keep the camera and scene still while capturing; use
 `--no-temporal-filter` if either is moving, to avoid temporal ghosting.
 
 ```shell
-python scene_capture.py --out captures --warmup 30
-python rgbd_to_pc.py --captures captures
+python scene_capture.py --out scenes_11_10_26 --warmup 30
+python rgbd_to_pc.py --captures scenes_11_10_26
 ```
 
 `rgbd_to_pc.py` only converts RGB-D frames to colored `.ply` point clouds; it
 does not load a checkpoint or run grasp inference. It converts all captures by
-default and writes `captures/pointclouds/scene_XXXX.ply`. Use
+default and writes `scenes_11_10_26/pointclouds/scene_XXXX.ply`. Use
 `--index 0` to convert only one frame, or `--cloud_dir PATH` to select another
 output folder.
 
@@ -144,7 +144,7 @@ disable median filtering, `5` for stronger single-frame smoothing, or
 conda activate cgn_3d
 
 python 3d_inference_new.py \
-    --ply captures/my_scene.ply \
+    --ply scenes_11_10_26/my_scene.ply \
     --out visualisation/my_scene_grasps.glb
 ```
 
@@ -180,13 +180,13 @@ segmentation, table-collision filtering, and writes
 
 **Standard tabletop scene (recommended defaults):**
 ```shell
-python 3d_inference_new.py --ply captures/scene.ply
+python 3d_inference_new.py --ply scenes_11_10_26/scene.ply
 ```
 
 **Show only the top 5 grasps with the table plane visible:**
 ```shell
 python 3d_inference_new.py \
-    --ply captures/scene.ply \
+    --ply scenes_11_10_26/scene.ply \
     --top_n 5 \
     --show_plane
 ```
@@ -194,14 +194,14 @@ python 3d_inference_new.py \
 **Object is large / scene is cluttered — use robust table detection:**
 ```shell
 python 3d_inference_new.py \
-    --ply captures/scene.ply \
+    --ply scenes_11_10_26/scene.ply \
     --table_method robust
 ```
 
 **Manually specify a known table plane (e.g. flat surface at z = -0.72 m):**
 ```shell
 python 3d_inference_new.py \
-    --ply captures/scene.ply \
+    --ply scenes_11_10_26/scene.ply \
     --table_normal 0,0,1 \
     --table_d 0.72
 ```
@@ -212,7 +212,7 @@ python 3d_inference_new.py \
 **Lower score threshold to get more grasp candidates:**
 ```shell
 python 3d_inference_new.py \
-    --ply captures/scene.ply \
+    --ply scenes_11_10_26/scene.ply \
     --score_threshold 0.15 \
     --top_n 10
 ```
@@ -220,7 +220,7 @@ python 3d_inference_new.py \
 **Sparse or thin object — relax DBSCAN to avoid empty clusters:**
 ```shell
 python 3d_inference_new.py \
-    --ply captures/scene.ply \
+    --ply scenes_11_10_26/scene.ply \
     --eps 0.03 \
     --min_points 15
 ```
@@ -228,7 +228,7 @@ python 3d_inference_new.py \
 **Abort if no reliable table is detected (strict mode):**
 ```shell
 python 3d_inference_new.py \
-    --ply captures/scene.ply \
+    --ply scenes_11_10_26/scene.ply \
     --require_table
 ```
 
@@ -237,7 +237,12 @@ python 3d_inference_new.py \
 | File | Contents |
 |------|----------|
 | `<out>.html` | Interactive Plotly 3D scene (open in any browser) |
-| `<out>_grasp_poses.npz` | NumPy archive with `obj_ids`, `ranks`, `rotations` (Nx3x3), `translations` (Nx3) for the top-3 grasps per object |
+| `<out>_grasp_poses.npz` | NumPy archive with `obj_ids`, `ranks`, `rotations` (Nx3x3), and `translations` (Nx3) for the top-3 grasps per object. `table_collision_checked` marks whether each pose passed final pose and approach-path clearance checks; poses marked `False` are unchecked and must not be treated as collision-safe. `minimum_table_clearance_m` records the configured threshold. |
+
+When a validated table plane is available, poses that still fail clearance after
+rotation correction are discarded before ranking and export. If the plane is
+missing or fails validation, poses may still be exported for inspection, but
+their `table_collision_checked` value is `False`.
 
 ### Troubleshooting
 
@@ -247,7 +252,7 @@ python 3d_inference_new.py \
 | `Dominant-plane RANSAC did not find a usable table` | Try `--table_method robust`, or supply a manual `--table_normal`/`--table_d` |
 | All grasps filtered out | Lower `--score_threshold`; check `--min_clearance` is not too large |
 | `--table_normal and --table_d must always be used together` | Supply both flags or neither — one without the other is an error |
-| Mesh reconstruction falls back to point cloud in HTML | Normal for very sparse captures; the HTML still shows all grasps correctly |
+| Mesh reconstruction falls back to points | Reconstruction failed or the cloud is too sparse; the HTML and/or Mayavi view shows the points instead |
 
 
 

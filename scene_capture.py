@@ -7,7 +7,7 @@ Install:  pip install pyrealsense2 numpy opencv-python
 Usage:
     python capture_realsense.py                  # live preview, press 's' to save, 'q' to quit
     python capture_realsense.py --single         # grab one aligned frame and exit
-    python capture_realsense.py --width 1280 --height 720 --fps 30 --out captures
+    python capture_realsense.py --width 1280 --height 720 --fps 30 --out scenes_11_10_26
 
 Saved per capture (in <out>/):
     rgb_XXXX.png        8-bit BGR color image
@@ -31,7 +31,7 @@ def parse_args():
     p.add_argument("--width", type=int, default=640)
     p.add_argument("--height", type=int, default=480)
     p.add_argument("--fps", type=int, default=30)
-    p.add_argument("--out", type=str, default="captures")
+    p.add_argument("--out", type=str, default="scenes_11_10_26")
     p.add_argument("--single", action="store_true", help="capture one frame and exit")
     p.add_argument("--no-align", action="store_true",
                    help="do not align depth to color (keeps native depth geometry)")
