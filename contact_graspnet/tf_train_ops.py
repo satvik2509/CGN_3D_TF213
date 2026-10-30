@@ -5,6 +5,8 @@ tf.disable_eager_execution()
 TF2 = True
 
 from data import farthest_points
+from contact_graspnet import safe_l2_normalize
+
 
 def get_learning_rate(step, optimizer_config):
     """
@@ -181,7 +183,23 @@ def build_train_op(total_loss, step, global_config):
     else:
         optimizer = tf.train.GradientDescentOptimizer(learning_rate)
 
-    train_op = optimizer.minimize(total_loss, global_step=step, var_list=tf.global_variables())
+    gradients_and_vars = optimizer.compute_gradients(total_loss, var_list=tf.global_variables())
+    checked_gradients_and_vars = []
+    for gradient, variable in gradients_and_vars:
+        if gradient is not None:
+            gradient = tf.check_numerics(gradient, 'Non-finite gradient for {}'.format(variable.name))
+            checked_gradients_and_vars.append((gradient, variable))
+
+    raw_grads = [g for g, _ in checked_gradients_and_vars]
+    raw_vars  = [v for _, v in checked_gradients_and_vars]
+    grad_clip_norm = global_config['OPTIMIZER'].get('grad_clip_norm')
+    if grad_clip_norm is not None:
+        clipped_grads, global_norm = tf.clip_by_global_norm(raw_grads, grad_clip_norm)
+        tf.summary.scalar('gradient_global_norm', global_norm)
+    else:
+        clipped_grads = raw_grads
+
+    train_op = optimizer.apply_gradients(zip(clipped_grads, raw_vars), global_step=step)
     if TF2:
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         train_op = tf.group([train_op, update_ops])
@@ -210,6 +228,46 @@ def load_contact_grasps(contact_list, data_config):
     pos_approach_dirs = []
 
     for i,c in enumerate(contact_list):
+        if all(key in c for key in ('contact_points', 'contact_dirs', 'contact_approaches', 'finger_diffs')):
+            all_pos_contact_points = np.asarray(c['contact_points'], dtype=np.float32)
+            all_pos_contact_dirs = np.asarray(c['contact_dirs'], dtype=np.float32)
+            all_pos_approach_dirs = np.asarray(c['contact_approaches'], dtype=np.float32)
+            all_pos_finger_diffs = np.asarray(c['finger_diffs'], dtype=np.float32)
+            if (
+                all_pos_contact_points.ndim != 2
+                or all_pos_contact_points.shape[1] != 3
+                or all_pos_contact_dirs.shape != all_pos_contact_points.shape
+                or all_pos_approach_dirs.shape != all_pos_contact_points.shape
+                or all_pos_finger_diffs.shape != (len(all_pos_contact_points),)
+                or len(all_pos_contact_points) == 0
+            ):
+                raise ValueError(f"Invalid direct GraspNet contact labels for scene {c.get('scene_id', i)}")
+            if not (
+                np.isfinite(all_pos_contact_points).all()
+                and np.isfinite(all_pos_contact_dirs).all()
+                and np.isfinite(all_pos_approach_dirs).all()
+                and np.isfinite(all_pos_finger_diffs).all()
+            ):
+                raise ValueError(f"Non-finite direct GraspNet contact labels for scene {c.get('scene_id', i)}")
+            if (
+                np.any(np.linalg.norm(all_pos_contact_dirs, axis=1) <= 1e-8)
+                or np.any(np.linalg.norm(all_pos_approach_dirs, axis=1) <= 1e-8)
+            ):
+                raise ValueError(f"Zero-norm direct GraspNet direction labels for scene {c.get('scene_id', i)}")
+            if len(all_pos_contact_points) < num_pos_contacts:
+                pos_sampled_contact_idcs = np.random.choice(
+                    len(all_pos_contact_points), num_pos_contacts, replace=True
+                )
+            else:
+                pos_sampled_contact_idcs = np.random.choice(
+                    len(all_pos_contact_points), num_pos_contacts, replace=False
+                )
+            pos_contact_points.append(all_pos_contact_points[pos_sampled_contact_idcs])
+            pos_contact_dirs.append(all_pos_contact_dirs[pos_sampled_contact_idcs])
+            pos_finger_diffs.append(all_pos_finger_diffs[pos_sampled_contact_idcs])
+            pos_approach_dirs.append(all_pos_approach_dirs[pos_sampled_contact_idcs])
+            continue
+
         contact_directions_01 = c['scene_contact_points'][:,0,:] - c['scene_contact_points'][:,1,:]
         all_contact_points = c['scene_contact_points'].reshape(-1,3)
         all_finger_diffs = np.maximum(np.linalg.norm(contact_directions_01,axis=1), np.finfo(np.float32).eps)
@@ -249,8 +307,13 @@ def load_contact_grasps(contact_list, data_config):
     with tf.device(device):
         tf_scene_idcs = tf.constant(np.arange(0,len(pos_contact_points)), tf.int32)
         tf_pos_contact_points = tf.constant(np.array(pos_contact_points), tf.float32)
-        tf_pos_contact_dirs =  tf.math.l2_normalize(tf.constant(np.array(pos_contact_dirs), tf.float32),axis=2)
+        # Use safe_l2_normalize so degenerate zero-norm directions never produce NaN.
+        tf_pos_contact_dirs = safe_l2_normalize(
+            tf.constant(np.array(pos_contact_dirs), tf.float32), axis=2,
+            name='normalize_contact_dirs')
         tf_pos_finger_diffs = tf.constant(np.array(pos_finger_diffs), tf.float32)
-        tf_pos_contact_approaches =  tf.math.l2_normalize(tf.constant(np.array(pos_approach_dirs), tf.float32),axis=2)
+        tf_pos_contact_approaches = safe_l2_normalize(
+            tf.constant(np.array(pos_approach_dirs), tf.float32), axis=2,
+            name='normalize_approach_dirs')
 
     return tf_pos_contact_points, tf_pos_contact_dirs, tf_pos_contact_approaches, tf_pos_finger_diffs, tf_scene_idcs

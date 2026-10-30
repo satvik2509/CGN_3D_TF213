@@ -19,6 +19,14 @@ from tf_grouping import query_ball_point, group_point, knn_point
 
 import mesh_utils
 
+
+def safe_l2_normalize(x, axis, eps=1e-6, name=None):
+    """Normalize vectors while keeping zero and near-zero inputs finite."""
+    with tf.name_scope(name or 'safe_l2_normalize'):
+        squared_norm = tf.reduce_sum(tf.square(x), axis=axis, keepdims=True)
+        return x * tf.math.rsqrt(tf.maximum(squared_norm, eps * eps))
+
+
 def placeholder_inputs(batch_size, num_input_points=20000, input_normals=False):
     """
     Creates placeholders for input pointclouds, scene indices, camera poses and training/eval mode 
@@ -149,20 +157,22 @@ def get_model(point_cloud, is_training, global_config, bn_decay=None):
         head = tf_util.dropout(head, keep_prob=0.7, is_training=is_training, scope='dp1')
         head = tf_util.conv1d(head, 4, 1, padding='VALID', activation_fn=None, scope='fc2')
         grasp_dir_head = tf.slice(head, [0,0,0], [-1,-1,3])
-        grasp_dir_head = tf.math.l2_normalize(grasp_dir_head, axis=2)
+        grasp_dir_head = safe_l2_normalize(grasp_dir_head, axis=2)
         binary_seg_head = tf.slice(head, [0,0,3], [-1,-1,1])
     else:
         # Head for grasp direction
         grasp_dir_head = tf_util.conv1d(l0_points, 128, 1, padding='VALID', bn=True, is_training=is_training, scope='fc1', bn_decay=bn_decay)
         grasp_dir_head = tf_util.dropout(grasp_dir_head, keep_prob=0.7, is_training=is_training, scope='dp1')
         grasp_dir_head = tf_util.conv1d(grasp_dir_head, 3, 1, padding='VALID', activation_fn=None, scope='fc3')
-        grasp_dir_head_normed = tf.math.l2_normalize(grasp_dir_head, axis=2)
-
+        grasp_dir_head_normed = safe_l2_normalize(grasp_dir_head, axis=2)
         # Head for grasp approach
         approach_dir_head = tf_util.conv1d(l0_points, 128, 1, padding='VALID', bn=True, is_training=is_training, scope='fc1_app', bn_decay=bn_decay)
         approach_dir_head = tf_util.dropout(approach_dir_head, keep_prob=0.7, is_training=is_training, scope='dp1_app')
         approach_dir_head = tf_util.conv1d(approach_dir_head, 3, 1, padding='VALID', activation_fn=None, scope='fc3_app')
-        approach_dir_head_orthog = tf.math.l2_normalize(approach_dir_head - tf.reduce_sum(tf.multiply(grasp_dir_head_normed, approach_dir_head), axis=2, keepdims=True)*grasp_dir_head_normed, axis=2)
+        _approach_residual = approach_dir_head - tf.reduce_sum(
+            tf.multiply(grasp_dir_head_normed, approach_dir_head), axis=2, keepdims=True
+        ) * grasp_dir_head_normed
+        approach_dir_head_orthog = safe_l2_normalize(_approach_residual, axis=2)
         
         # Head for grasp width
         if model_config['dir_vec_length_offset']:
@@ -187,7 +197,6 @@ def get_model(point_cloud, is_training, global_config, bn_decay=None):
     end_points['grasp_offset_pred'] = tf.math.sigmoid(grasp_offset_head) if model_config['bin_offsets'] else grasp_offset_head
     end_points['approach_dir_head'] = approach_dir_head_orthog
     end_points['pred_points'] = pred_points
-
     return end_points
 
 def build_6d_grasp(approach_dirs, base_dirs, contact_pts, thickness, use_tf=False, gripper_depth = 0.1034):
@@ -259,62 +268,113 @@ def get_losses(pointclouds_pl, end_points, dir_labels_pc_cam, offset_labels_pc, 
     min_geom_loss_divisor = tf.constant(float(global_config['LOSS']['min_geom_loss_divisor'])) if 'min_geom_loss_divisor' in global_config['LOSS'] else tf.constant(1.)
     pos_grasps_in_view = tf.math.maximum(tf.reduce_sum(grasp_success_labels_pc, axis=1), min_geom_loss_divisor)   
 
-    ### ADS Gripper PC Loss
-    if global_config['MODEL']['bin_offsets']:
-        thickness_pred = tf.gather_nd(get_bin_vals(global_config), tf.expand_dims(tf.argmax(grasp_offset_head, axis=2), axis=2))
-        thickness_gt = tf.gather_nd(get_bin_vals(global_config), tf.expand_dims(tf.argmax(offset_labels_pc, axis=2), axis=2))
-    else:
-        thickness_pred = grasp_offset_head[:,:,0]
-        thickness_gt = offset_labels_pc[:,:,0]
-    pred_grasps = build_6d_grasp(approach_dir_head, grasp_dir_head, pointclouds_pl, thickness_pred, use_tf=True) # b x num_point x 4 x 4
-    gt_grasps_proj = build_6d_grasp(approach_labels_pc_cam, dir_labels_pc_cam, pointclouds_pl, thickness_gt, use_tf=True) # b x num_point x 4 x 4
-    pos_gt_grasps_proj = tf.where(tf.broadcast_to(tf.expand_dims(tf.expand_dims(tf.cast(grasp_success_labels_pc, tf.bool),2),3), gt_grasps_proj.shape), gt_grasps_proj, tf.ones_like(gt_grasps_proj)*100000)
-    # pos_gt_grasps_proj = tf.reshape(pos_gt_grasps_proj, (global_config['OPTIMIZER']['batch_size'], -1, 4, 4)) 
+    model_config = global_config['MODEL']
+    adds_loss = tf.constant(0., dtype=tf.float32)
+    adds_loss_gt2pred = tf.constant(0., dtype=tf.float32)
+    if model_config['pred_grasps_adds'] or model_config['pred_grasps_adds_gt2pred']:
+        if model_config['bin_offsets']:
+            thickness_pred = tf.gather_nd(get_bin_vals(global_config), tf.expand_dims(tf.argmax(grasp_offset_head, axis=2), axis=2))
+            thickness_gt = tf.gather_nd(get_bin_vals(global_config), tf.expand_dims(tf.argmax(offset_labels_pc, axis=2), axis=2))
+        else:
+            thickness_pred = grasp_offset_head[:,:,0]
+            thickness_gt = offset_labels_pc[:,:,0]
+        pred_grasps = build_6d_grasp(approach_dir_head, grasp_dir_head, pointclouds_pl, thickness_pred, use_tf=True)
+        gt_grasps_proj = build_6d_grasp(approach_labels_pc_cam, dir_labels_pc_cam, pointclouds_pl, thickness_gt, use_tf=True)
 
-    gripper = mesh_utils.create_gripper('panda')
-    gripper_control_points = gripper.get_control_point_tensor(global_config['OPTIMIZER']['batch_size']) # b x 5 x 3
-    sym_gripper_control_points = gripper.get_control_point_tensor(global_config['OPTIMIZER']['batch_size'], symmetric=True)
+        gripper = mesh_utils.create_gripper('panda')
+        gripper_control_points = gripper.get_control_point_tensor(global_config['OPTIMIZER']['batch_size'])
+        sym_gripper_control_points = gripper.get_control_point_tensor(
+            global_config['OPTIMIZER']['batch_size'], symmetric=True
+        )
+        gripper_control_points_homog = tf.concat([
+            gripper_control_points,
+            tf.ones((global_config['OPTIMIZER']['batch_size'], gripper_control_points.shape[1], 1)),
+        ], axis=2)
+        sym_gripper_control_points_homog = tf.concat([
+            sym_gripper_control_points,
+            tf.ones((global_config['OPTIMIZER']['batch_size'], gripper_control_points.shape[1], 1)),
+        ], axis=2)
+        control_points = tf.keras.backend.repeat_elements(
+            tf.expand_dims(gripper_control_points_homog, 1), gt_grasps_proj.shape[1], axis=1
+        )
+        sym_control_points = tf.keras.backend.repeat_elements(
+            tf.expand_dims(sym_gripper_control_points_homog, 1), gt_grasps_proj.shape[1], axis=1
+        )
+        pred_control_points = tf.matmul(
+            control_points, tf.transpose(pred_grasps, perm=[0, 1, 3, 2])
+        )[:,:,:,:3]
 
-    gripper_control_points_homog =  tf.concat([gripper_control_points, tf.ones((global_config['OPTIMIZER']['batch_size'], gripper_control_points.shape[1], 1))], axis=2)  # b x 5 x 4
-    sym_gripper_control_points_homog =  tf.concat([sym_gripper_control_points, tf.ones((global_config['OPTIMIZER']['batch_size'], gripper_control_points.shape[1], 1))], axis=2)  # b x 5 x 4
-    
-    # only use per point pred grasps but not per point gt grasps
-    control_points = tf.keras.backend.repeat_elements(tf.expand_dims(gripper_control_points_homog,1), gt_grasps_proj.shape[1], axis=1)  # b x num_point x 5 x 4
-    sym_control_points = tf.keras.backend.repeat_elements(tf.expand_dims(sym_gripper_control_points_homog,1), gt_grasps_proj.shape[1], axis=1)  # b x num_point x 5 x 4
-    pred_control_points = tf.matmul(control_points, tf.transpose(pred_grasps, perm=[0, 1, 3, 2]))[:,:,:,:3] #  b x num_point x 5 x 3
+        if model_config['pred_grasps_adds']:
+            pos_gt_grasps_proj = tf.where(
+                tf.broadcast_to(
+                    tf.expand_dims(tf.expand_dims(tf.cast(grasp_success_labels_pc, tf.bool), 2), 3),
+                    gt_grasps_proj.shape,
+                ),
+                gt_grasps_proj,
+                tf.ones_like(gt_grasps_proj) * 100000,
+            )
+            gt_control_points = tf.matmul(
+                control_points, tf.transpose(pos_gt_grasps_proj, perm=[0, 1, 3, 2])
+            )[:,:,:,:3]
+            sym_gt_control_points = tf.matmul(
+                sym_control_points, tf.transpose(pos_gt_grasps_proj, perm=[0, 1, 3, 2])
+            )[:,:,:,:3]
+            squared_add = tf.reduce_sum(
+                (tf.expand_dims(pred_control_points, 2) - tf.expand_dims(gt_control_points, 1))**2,
+                axis=(3, 4),
+            )
+            sym_squared_add = tf.reduce_sum(
+                (tf.expand_dims(pred_control_points, 2) - tf.expand_dims(sym_gt_control_points, 1))**2,
+                axis=(3, 4),
+            )
+            neg_squared_adds = -tf.concat([squared_add, sym_squared_add], axis=2)
+            neg_squared_adds_k = tf.math.top_k(neg_squared_adds, k=1, sorted=False)[0]
+            min_adds = tf.minimum(
+                tf.reduce_sum(grasp_success_labels_pc, axis=1, keepdims=True),
+                tf.ones_like(neg_squared_adds_k[:,:,0]),
+            ) * tf.sqrt(-neg_squared_adds_k[:,:,0])
+            adds_loss = tf.reduce_mean(end_points['binary_seg_pred'][:,:,0] * min_adds)
 
-    ### Pred Grasp to GT Grasp ADD-S Loss
-    gt_control_points = tf.matmul(control_points, tf.transpose(pos_gt_grasps_proj, perm=[0, 1, 3, 2]))[:,:,:,:3] #  b x num_pos_grasp_point x 5 x 3
-    sym_gt_control_points = tf.matmul(sym_control_points, tf.transpose(pos_gt_grasps_proj, perm=[0, 1, 3, 2]))[:,:,:,:3] #  b x num_pos_grasp_point x 5 x 3
-
-    squared_add = tf.reduce_sum((tf.expand_dims(pred_control_points,2)-tf.expand_dims(gt_control_points,1))**2, axis=(3,4)) # b x num_point x num_pos_grasp_point x ( 5 x 3)
-    sym_squared_add = tf.reduce_sum((tf.expand_dims(pred_control_points,2)-tf.expand_dims(sym_gt_control_points,1))**2, axis=(3,4)) # b x num_point x num_pos_grasp_point x ( 5 x 3)
-
-    # symmetric ADD-S
-    neg_squared_adds = -tf.concat([squared_add,sym_squared_add], axis=2) # b x num_point x 2num_pos_grasp_point
-    neg_squared_adds_k = tf.math.top_k(neg_squared_adds, k=1, sorted=False)[0] # b x num_point
-    # If any pos grasp exists
-    min_adds = tf.minimum(tf.reduce_sum(grasp_success_labels_pc, axis=1, keepdims=True), tf.ones_like(neg_squared_adds_k[:,:,0])) * tf.sqrt(-neg_squared_adds_k[:,:,0])#tf.minimum(tf.sqrt(-neg_squared_adds_k), tf.ones_like(neg_squared_adds_k)) # b x num_point
-    adds_loss = tf.reduce_mean(end_points['binary_seg_pred'][:,:,0] * min_adds)
-
-    ### GT Grasp to pred Grasp ADD-S Loss
-    gt_control_points = tf.matmul(control_points, tf.transpose(gt_grasps_proj, perm=[0, 1, 3, 2]))[:,:,:,:3] #  b x num_pos_grasp_point x 5 x 3
-    sym_gt_control_points = tf.matmul(sym_control_points, tf.transpose(gt_grasps_proj, perm=[0, 1, 3, 2]))[:,:,:,:3] #  b x num_pos_grasp_point x 5 x 3
-
-    neg_squared_adds = -tf.reduce_sum((tf.expand_dims(pred_control_points,1)-tf.expand_dims(gt_control_points,2))**2, axis=(3,4)) # b x num_point x num_pos_grasp_point x ( 5 x 3)
-    neg_squared_adds_sym = -tf.reduce_sum((tf.expand_dims(pred_control_points,1)-tf.expand_dims(sym_gt_control_points,2))**2, axis=(3,4)) # b x num_point x num_pos_grasp_point x ( 5 x 3)
-
-    neg_squared_adds_k_gt2pred, pred_grasp_idcs = tf.math.top_k(neg_squared_adds, k=1, sorted=False) # b x num_pos_grasp_point
-    neg_squared_adds_k_sym_gt2pred, pred_grasp_sym_idcs = tf.math.top_k(neg_squared_adds_sym, k=1, sorted=False) # b x num_pos_grasp_point
-    pred_grasp_idcs_joined = tf.where(neg_squared_adds_k_gt2pred<neg_squared_adds_k_sym_gt2pred, pred_grasp_sym_idcs, pred_grasp_idcs)
-    min_adds_gt2pred = tf.minimum(-neg_squared_adds_k_gt2pred, -neg_squared_adds_k_sym_gt2pred) # b x num_pos_grasp_point x 1
-    # min_adds_gt2pred = tf.math.exp(-min_adds_gt2pred)
-    masked_min_adds_gt2pred = tf.multiply(min_adds_gt2pred[:,:,0], grasp_success_labels_pc)
-    
-    batch_idcs = tf.meshgrid(tf.range(pred_grasp_idcs_joined.shape[1]), tf.range(pred_grasp_idcs_joined.shape[0]))
-    gather_idcs = tf.stack((batch_idcs[1],pred_grasp_idcs_joined[:,:,0]), axis=2)
-    nearest_pred_grasp_confidence = tf.gather_nd(end_points['binary_seg_pred'][:,:,0], gather_idcs)
-    adds_loss_gt2pred = tf.reduce_mean(tf.reduce_sum(nearest_pred_grasp_confidence*masked_min_adds_gt2pred, axis=1) / pos_grasps_in_view)
+        if model_config['pred_grasps_adds_gt2pred']:
+            gt_control_points = tf.matmul(
+                control_points, tf.transpose(gt_grasps_proj, perm=[0, 1, 3, 2])
+            )[:,:,:,:3]
+            sym_gt_control_points = tf.matmul(
+                sym_control_points, tf.transpose(gt_grasps_proj, perm=[0, 1, 3, 2])
+            )[:,:,:,:3]
+            neg_squared_adds = -tf.reduce_sum(
+                (tf.expand_dims(pred_control_points, 1) - tf.expand_dims(gt_control_points, 2))**2,
+                axis=(3, 4),
+            )
+            neg_squared_adds_sym = -tf.reduce_sum(
+                (tf.expand_dims(pred_control_points, 1) - tf.expand_dims(sym_gt_control_points, 2))**2,
+                axis=(3, 4),
+            )
+            neg_squared_adds_k_gt2pred, pred_grasp_idcs = tf.math.top_k(
+                neg_squared_adds, k=1, sorted=False
+            )
+            neg_squared_adds_k_sym_gt2pred, pred_grasp_sym_idcs = tf.math.top_k(
+                neg_squared_adds_sym, k=1, sorted=False
+            )
+            pred_grasp_idcs_joined = tf.where(
+                neg_squared_adds_k_gt2pred < neg_squared_adds_k_sym_gt2pred,
+                pred_grasp_sym_idcs,
+                pred_grasp_idcs,
+            )
+            min_adds_gt2pred = tf.minimum(
+                -neg_squared_adds_k_gt2pred, -neg_squared_adds_k_sym_gt2pred
+            )
+            masked_min_adds_gt2pred = tf.multiply(min_adds_gt2pred[:,:,0], grasp_success_labels_pc)
+            batch_idcs = tf.meshgrid(
+                tf.range(pred_grasp_idcs_joined.shape[1]),
+                tf.range(pred_grasp_idcs_joined.shape[0]),
+            )
+            gather_idcs = tf.stack((batch_idcs[1], pred_grasp_idcs_joined[:,:,0]), axis=2)
+            nearest_pred_grasp_confidence = tf.gather_nd(end_points['binary_seg_pred'][:,:,0], gather_idcs)
+            adds_loss_gt2pred = tf.reduce_mean(
+                tf.reduce_sum(nearest_pred_grasp_confidence * masked_min_adds_gt2pred, axis=1)
+                / pos_grasps_in_view
+            )
  
     ### Grasp baseline Loss
     cosine_distance = tf.constant(1.)-tf.reduce_sum(tf.multiply(dir_labels_pc_cam, grasp_dir_head),axis=2)
@@ -323,7 +383,9 @@ def get_losses(pointclouds_pl, end_points, dir_labels_pc_cam, offset_labels_pc, 
     dir_cosine_loss = tf.reduce_mean(tf.reduce_sum(masked_cosine_loss, axis=1) / pos_grasps_in_view)
 
     ### Grasp Approach Loss
-    approach_labels_orthog = tf.math.l2_normalize(approach_labels_pc_cam - tf.reduce_sum(tf.multiply(grasp_dir_head, approach_labels_pc_cam), axis=2, keepdims=True)*grasp_dir_head, axis=2)
+    _approach_proj = tf.reduce_sum(tf.multiply(grasp_dir_head, approach_labels_pc_cam), axis=2, keepdims=True)
+    _approach_label_residual = approach_labels_pc_cam - _approach_proj * grasp_dir_head
+    approach_labels_orthog = safe_l2_normalize(_approach_label_residual, axis=2)
     cosine_distance_approach = tf.constant(1.)-tf.reduce_sum(tf.multiply(approach_labels_orthog, approach_dir_head), axis=2)
     masked_approach_loss = tf.multiply(cosine_distance_approach, grasp_success_labels_pc)
     approach_cosine_loss = tf.reduce_mean(tf.reduce_sum(masked_approach_loss, axis=1) / pos_grasps_in_view)
@@ -430,9 +492,12 @@ def compute_labels(pos_contact_pts_mesh, pos_contact_dirs_mesh, pos_contact_appr
     grouped_approaches_pc_cam = group_point(pos_contact_approaches_batch_cam, close_contact_pt_idcs)
     grouped_offsets = group_point(tf.expand_dims(contact_point_offsets_batch,2), close_contact_pt_idcs)
 
-    dir_labels_pc_cam = tf.math.l2_normalize(tf.reduce_mean(grouped_dirs_pc_cam, axis=2),axis=2) # (batch_size, num_point, 3)
-    approach_labels_pc_cam = tf.math.l2_normalize(tf.reduce_mean(grouped_approaches_pc_cam, axis=2),axis=2) # (batch_size, num_point, 3)
-    offset_labels_pc = tf.reduce_mean(grouped_offsets, axis=2)
-        
-    return dir_labels_pc_cam, offset_labels_pc, grasp_success_labels_pc, approach_labels_pc_cam
+    _mean_dirs = tf.reduce_mean(grouped_dirs_pc_cam, axis=2)
+    dir_labels_pc_cam = safe_l2_normalize(_mean_dirs, axis=2)
 
+    _mean_approaches = tf.reduce_mean(grouped_approaches_pc_cam, axis=2)
+    approach_labels_pc_cam = safe_l2_normalize(_mean_approaches, axis=2)
+
+    offset_labels_pc = tf.reduce_mean(grouped_offsets, axis=2)
+
+    return dir_labels_pc_cam, offset_labels_pc, grasp_success_labels_pc, approach_labels_pc_cam

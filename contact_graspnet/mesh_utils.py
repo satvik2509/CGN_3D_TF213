@@ -36,8 +36,7 @@ class Object(object):
             print("Warning: Will do a concatenation")
             self.mesh = trimesh.util.concatenate(self.mesh)
 
-        self.collision_manager = trimesh.collision.CollisionManager()
-        self.collision_manager.add_object('object', self.mesh)
+        self._collision_manager = None
 
     def rescale(self, scale=1.0):
         """Set scale of object mesh.
@@ -62,7 +61,10 @@ class Object(object):
         :param transform:
         :return: boolean value
         """
-        return self.collision_manager.in_collision_single(mesh, transform=transform)
+        if self._collision_manager is None:
+            self._collision_manager = trimesh.collision.CollisionManager()
+            self._collision_manager.add_object('object', self.mesh)
+        return self._collision_manager.in_collision_single(mesh, transform=transform)
 
 
 class PandaGripper(object):

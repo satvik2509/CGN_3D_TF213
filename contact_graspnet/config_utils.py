@@ -16,7 +16,15 @@ def recursive_key_value_assign(d,ks,v):
     elif len(ks) == 1:
         d[ks[0]] = v
  
-def load_config(checkpoint_dir, batch_size=None, max_epoch=None, data_path=None, arg_configs=[], save=False):
+def load_config(
+    checkpoint_dir,
+    batch_size=None,
+    max_epoch=None,
+    data_path=None,
+    arg_configs=[],
+    save=False,
+    config_path=None,
+):
     """
     Loads yaml config file and overwrites parameters with function arguments and --arg_config parameters
 
@@ -34,9 +42,14 @@ def load_config(checkpoint_dir, batch_size=None, max_epoch=None, data_path=None,
         [dict] -- Config
     """
 
-    config_path = os.path.join(checkpoint_dir, 'config.yaml')
-    config_path = config_path if os.path.exists(config_path) else os.path.join(os.path.dirname(__file__),'config.yaml')
-    with open(config_path,'r') as f:
+    checkpoint_config_path = os.path.join(checkpoint_dir, 'config.yaml')
+    if os.path.exists(checkpoint_config_path):
+        source_config_path = checkpoint_config_path
+    elif config_path is not None:
+        source_config_path = config_path
+    else:
+        source_config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+    with open(source_config_path, 'r') as f:
         global_config = yaml.safe_load(f)
 
     for conf in arg_configs:

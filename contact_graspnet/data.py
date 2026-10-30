@@ -17,12 +17,8 @@ import trimesh.transformations as tra
 from scipy.spatial import cKDTree
 
 import provider
-try:
-    from scene_renderer import SceneRenderer
-except Exception:
-    SceneRenderer = None
 
-def load_scene_contacts(dataset_folder, test_split_only=False, num_test=None, scene_contacts_path='scene_contacts_new'):
+def load_scene_contacts(dataset_folder, test_split_only=False, num_test=None, scene_contacts_path='scene_contacts_new', excluded_scenes_file=None, max_scenes=None):
     """
     Load contact grasp annotations from acronym scenes 
 
@@ -33,12 +29,24 @@ def load_scene_contacts(dataset_folder, test_split_only=False, num_test=None, sc
         test_split_only {bool} -- whether to only return test split scenes (default: {False})
         num_test {int} -- how many test scenes to use (default: {None})
         scene_contacts_path {str} -- name of folder with scene contact grasp annotations (default: {'scene_contacts_new'})
+        excluded_scenes_file {str} -- path to file listing scene filenames to exclude (e.g. excluded_scenes.txt) (default: {None})
+        max_scenes {int} -- maximum number of scenes to load (default: {None})
 
     Returns:
         list(dicts) -- list of scene annotations dicts with object paths and transforms and grasp contacts and transforms.
     """
     
     scene_contact_paths = sorted(glob.glob(os.path.join(dataset_folder, scene_contacts_path, '*')))
+    if excluded_scenes_file is not None and os.path.exists(excluded_scenes_file):
+        with open(excluded_scenes_file, 'r') as f:
+            excluded_scenes = set(line.strip() for line in f if line.strip())
+        before_count = len(scene_contact_paths)
+        scene_contact_paths = [p for p in scene_contact_paths if os.path.basename(p) not in excluded_scenes]
+        print(f"Excluded {before_count - len(scene_contact_paths)} scenes based on {excluded_scenes_file}")
+
+    if max_scenes is not None:
+        scene_contact_paths = scene_contact_paths[:max_scenes]
+
     if test_split_only:
         scene_contact_paths = scene_contact_paths[-num_test:]
     contact_infos = []
@@ -404,7 +412,42 @@ def center_pc_convert_cam(cam_poses, batch_data):
     cam_poses[:,:3,3] -= pc_mean[:,0,:3]
     
     return cam_poses, batch_data
-    
+
+
+def apply_pointcloud_dropout(pc, occlusion_nclusters, occlusion_dropout_rate):
+    if occlusion_nclusters == 0 or occlusion_dropout_rate == 0.0:
+        return pc
+
+    labels = farthest_points(pc, occlusion_nclusters, distance_by_translation_point)
+    removed_labels = np.unique(labels)
+    removed_labels = removed_labels[
+        np.random.rand(removed_labels.shape[0]) < occlusion_dropout_rate
+    ]
+    if removed_labels.shape[0] == 0:
+        return pc
+
+    keep_mask = np.ones(labels.shape, dtype=bool)
+    for label in removed_labels:
+        keep_mask &= labels != label
+    return pc[keep_mask]
+
+
+def augment_point_cloud(pc, pc_augm_config):
+    augmented_pc = np.asarray(pc).copy()
+    if pc_augm_config.get('occlusion_nclusters', 0) > 0:
+        augmented_pc = apply_pointcloud_dropout(
+            augmented_pc,
+            pc_augm_config['occlusion_nclusters'],
+            pc_augm_config['occlusion_dropout_rate'],
+        )
+    if pc_augm_config.get('sigma', 0) > 0:
+        augmented_pc = provider.jitter_point_cloud(
+            augmented_pc[np.newaxis, :, :],
+            sigma=pc_augm_config['sigma'],
+            clip=pc_augm_config['clip'],
+        )[0]
+    return augmented_pc[:, :3]
+
 
 class PointCloudReader:
     """
@@ -469,6 +512,12 @@ class PointCloudReader:
         self._current_pc = None
         self._cache = {}
 
+        try:
+            from scene_renderer import SceneRenderer
+        except ImportError as exc:
+            raise ImportError(
+                "pyrender is required when using the ACRONYM PointCloudReader"
+            ) from exc
         self._renderer = SceneRenderer(caching=True, intrinsics=intrinsics)
 
         if use_uniform_quaternions:
@@ -524,19 +573,7 @@ class PointCloudReader:
             np.ndarray -- augmented point cloud
         """
         
-        # not used because no artificial occlusion
-        if 'occlusion_nclusters' in self._pc_augm_config and self._pc_augm_config['occlusion_nclusters'] > 0:
-            pc = self.apply_dropout(pc,
-                                    self._pc_augm_config['occlusion_nclusters'], 
-                                    self._pc_augm_config['occlusion_dropout_rate'])
-
-        if 'sigma' in self._pc_augm_config and self._pc_augm_config['sigma'] > 0:
-            pc = provider.jitter_point_cloud(pc[np.newaxis, :, :], 
-                                            sigma=self._pc_augm_config['sigma'], 
-                                            clip=self._pc_augm_config['clip'])[0]
-        
-        
-        return pc[:,:3]
+        return augment_point_cloud(pc, self._pc_augm_config)
 
     def _augment_depth(self, depth):
         """
@@ -574,19 +611,7 @@ class PointCloudReader:
         Returns:
             [np.ndarray] -- N > Mx3 point cloud
         """
-        if occlusion_nclusters == 0 or occlusion_dropout_rate == 0.:
-            return pc
-
-        labels = farthest_points(pc, occlusion_nclusters, distance_by_translation_point)
-
-        removed_labels = np.unique(labels)
-        removed_labels = removed_labels[np.random.rand(removed_labels.shape[0]) < occlusion_dropout_rate]
-        if removed_labels.shape[0] == 0:
-            return pc
-        mask = np.ones(labels.shape, labels.dtype)
-        for l in removed_labels:
-            mask = np.logical_and(mask, labels != l)
-        return pc[mask]
+        return apply_pointcloud_dropout(pc, occlusion_nclusters, occlusion_dropout_rate)
     
     def get_scene_batch(self, scene_idx=None, return_segmap=False, save=False):
         """
@@ -702,4 +727,3 @@ class PointCloudReader:
     def __del__(self):
         print('********** terminating renderer **************')
     
-

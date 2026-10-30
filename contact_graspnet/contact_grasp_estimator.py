@@ -99,6 +99,11 @@ class GraspEstimator:
         
         chkpt = tf.train.get_checkpoint_state(log_dir)
         if chkpt and chkpt.model_checkpoint_path:
+            if mode == 'train_scratch':
+                raise FileExistsError(
+                    f"Refusing to restore existing checkpoint {chkpt.model_checkpoint_path} "
+                    "for a scratch-training run; use --resume or choose a new --ckpt_dir."
+                )
             print(('loading ',  chkpt.model_checkpoint_path))
             saver.restore(sess, chkpt.model_checkpoint_path)
         else:

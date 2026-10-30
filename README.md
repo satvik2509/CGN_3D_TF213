@@ -152,6 +152,33 @@ This runs with all defaults: dominant-plane table detection, DBSCAN
 segmentation, table-collision filtering, and writes
 `visualisation/my_scene_grasps.html`.
 
+### Custom Gripper Geometry
+
+Inference uses `gripper_models/2_finger_open.stl` as the default maximum-width
+gripper model for both table-clearance checks and visualization. Mayavi renders
+the STL surface, while Plotly displays a deterministic sample of its vertices.
+The loader validates the mesh, the calibrated fingertip contact faces, and
+their separation against the configured 90 mm opening. The source-mm grasp
+anchor is `[-66.1702, 129.4646, 23.8768]`; the opposing contact reference is
+`[23.3804, 129.8870, 23.8768]`. Their measured separation in the STL is about
+89.55 mm (recorded separately as `gripper_asset_measured_opening_m`). The
+configured maximum opening is 90 mm, and the loader checks that the measured
+contact separation agrees within 1 mm and lies along the CGN closing axis.
+These coordinates are calibrated against the supplied asset and the
+user-confirmed shared source frame, not independently measured on the physical
+gripper. If the STL or its frame changes, update the calibration in
+`3d_inference_new.py`.
+
+The pose archive records the configured model opening as
+`fixed_gripper_opening_m`. Predicted grasp openings are not used to articulate
+or reject candidates, and `predicted_gripper_width_checked` (also available
+under the legacy key `gripper_width_checked`) is `False`.
+Table-clearance validation covers the
+maximum-width geometry at the grasp pose and straight approach standoff against
+the validated plane; it does not certify collisions with the object, robot arm,
+or other scene geometry. If no validated table plane is available, exported
+poses are marked unchecked.
+
 ### All Flags
 
 | Flag | Default | Description |
@@ -180,7 +207,8 @@ segmentation, table-collision filtering, and writes
 
 **Standard tabletop scene (recommended defaults):**
 ```shell
-python 3d_inference_new.py --ply scenes_11_10_26/scene.ply
+python 3d_inference_new.py   --ply scenes_11_10_26/pointclouds/scene_0005.ply   --mayavi   --top_n 1    --mesh
+
 ```
 
 **Show only the top 5 grasps with the table plane visible:**
@@ -237,7 +265,7 @@ python 3d_inference_new.py \
 | File | Contents |
 |------|----------|
 | `<out>.html` | Interactive Plotly 3D scene (open in any browser) |
-| `<out>_grasp_poses.npz` | NumPy archive with `obj_ids`, `ranks`, `rotations` (Nx3x3), and `translations` (Nx3) for the top-3 grasps per object. `table_collision_checked` marks whether each pose passed final pose and approach-path clearance checks; poses marked `False` are unchecked and must not be treated as collision-safe. `minimum_table_clearance_m` records the configured threshold. |
+| `<out>_grasp_poses.npz` | NumPy archive with `obj_ids`, `ranks`, `rotations` (Nx3x3), and `translations` (Nx3) for the top-3 grasps per object. `table_collision_checked` marks whether each pose passed final pose and approach-path clearance checks; poses marked `False` are unchecked and must not be treated as collision-safe. `minimum_table_clearance_m` records the configured threshold. `collision_gripper_model` identifies the STL used for table checks; `fixed_gripper_opening_m` records its 90 mm opening, and `gripper_width_checked=False` explicitly records that predicted openings were not validated. Calibration metadata includes `gripper_asset_scale_m_per_unit`, `gripper_contact_anchor_source_mm`, `gripper_opposite_contact_source_mm`, and `gripper_source_to_cgn`. |
 
 When a validated table plane is available, poses that still fail clearance after
 rotation correction are discarded before ranking and export. If the plane is
@@ -284,6 +312,43 @@ Start training with config `contact_graspnet/config.yaml`
 python contact_graspnet/train.py --ckpt_dir checkpoints/your_model_name \
                                  --data_path /path/to/acronym/data
 ```
+
+### Train on GraspNet-1B
+
+The GraspNet trainer uses the dataset's training scenes, object meshes,
+per-object grasp labels, and scene collision labels. It builds scene contact
+labels and renders fresh views of each scene with the existing CGN renderer.
+Five training scenes are held out for validation by default; the official test
+split is never included in training or validation.
+The GraspNet run enables the contact-direction and approach losses and disables
+the Acronym mesh ADD-S losses, which are not defined by the converted
+GraspNet point/pose labels.
+
+The GraspNet test split is not required for training. Five labeled training
+scenes are held out for validation by default; the official test split can be
+used separately for final evaluation if its labels are available.
+
+Use the project TensorFlow environment and set the headless renderer before
+starting:
+
+```shell
+conda activate cgn_3d
+export PYOPENGL_PLATFORM=egl
+python contact_graspnet/train.py \
+  --dataset_type graspnet \
+  --data_path ~/satvik/datasets/graspnet_1b \
+  --validation_scenes 5 \
+  --ckpt_dir checkpoints/graspnet_1b_from_scratch
+```
+
+GraspNet runs initialize model weights from scratch. Checkpoints, the resolved
+config, the training log, and a reusable converted-label cache are written to
+`checkpoints/graspnet_1b_from_scratch/`; the existing Acronym checkpoint is not
+modified. To continue an interrupted GraspNet run, pass `--resume`. The
+GraspNet path uses a lower learning rate and global gradient-norm clipping by
+default, and stops if a gradient is non-finite. The `--smoke_test` option runs
+one training batch and one validation scene on two training scenes; use a
+temporary checkpoint directory for that check.
 
 ### Generate Contact Grasps and Scenes yourself (optional)
 

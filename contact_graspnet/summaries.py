@@ -83,8 +83,10 @@ def build_summary_ops(ops, sess, global_config):
         tf.summary.scalar('offset_bin_classification_accuracy', tf.reduce_mean(tf.cast(tf.equal(ops['offset_pred_idcs_pc'], ops['offset_label_idcs_pc']),tf.float32)))
 
         bin_mean_preds = ops['offset_bin_pred_vals']
-        tf.summary.scalar('offset_mean_abs_error', tf.reduce_mean(tf.abs(bin_mean_preds - tf.reshape(tf.abs(ops['offset_orig_labels_vals']), [-1]))))
-        tf.summary.scalar('offset_max_abs_error', tf.reduce_max(tf.abs(bin_mean_preds - tf.reshape(tf.abs(ops['offset_orig_labels_vals']), [-1]))))
+        bin_mean_preds = tf.reshape(bin_mean_preds, [-1])
+        offset_labels = tf.reshape(tf.abs(ops['offset_orig_labels_vals']), [-1])
+        tf.summary.scalar('offset_mean_abs_error', tf.reduce_mean(tf.abs(bin_mean_preds - offset_labels)))
+        tf.summary.scalar('offset_max_abs_error', tf.reduce_max(tf.abs(bin_mean_preds - offset_labels)))
 
     merged = tf.summary.merge_all()
 

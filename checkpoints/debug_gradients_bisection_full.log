@@ -1,0 +1,350 @@
+2026-10-25 17:15:08.948472: I tensorflow/core/util/port.cc:113] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-10-25 17:15:08.986478: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2026-10-25 17:15:08.986533: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:607] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2026-10-25 17:15:08.987808: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1515] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2026-10-25 17:15:08.993804: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-10-25 17:15:09.636692: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+/NAS_DISK/BS2026/satvik/CGN_3D_TF213/pointnet2/tf_ops/sampling
+dataset=graspnet first_batch_index=0 scene_id=0 ann_id=0
+mode=bisection tf_seed=1234
+data_rng_seed=2026
+input_point_cloud: shape=(3, 2048, 3) finite=18432/18432 min=-0.67366225 max=1.4446517 mean=8.2784229e-10
+input_camera_poses: shape=(3, 4, 4) finite=48/48 min=-0.56519729 max=1 mean=0.20927994
+target_contact_points: shape=(8000, 3) finite=24000/24000 min=-0.41184926 max=0.52302152 mean=0.10441525
+target_contact_dirs: shape=(8000, 3) finite=24000/24000 min=-0.99979341 max=0.99979341 mean=1.4901162e-11
+target_contact_approaches: shape=(8000, 3) finite=24000/24000 min=-0.99762565 max=0.99951714 mean=0.16789654
+target_finger_diffs: shape=(8000,) finite=8000/8000 min=0.0033376759 max=0.079983979 mean=0.050800055
+--- Get model
+/NAS_DISK/BS2026/satvik/CGN_3D_TF213/pointnet2/utils/tf_util.py:572: UserWarning: `tf.layers.batch_normalization` is deprecated and will be removed in a future version. Please use `tf.keras.layers.BatchNormalization` instead. In particular, `tf.control_dependencies(tf.GraphKeys.UPDATE_OPS)` should not be used (consult the `tf.keras.layers.BatchNormalization` documentation).
+  return tf.layers.batch_normalization(
+2026-10-25 17:15:11.456683: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 38458 MB memory:  -> device: 0, name: NVIDIA A100-PCIE-40GB, pci bus id: 0000:3b:00.0, compute capability: 8.0
+WARNING:tensorflow:From /home/satvik/miniconda3/envs/cgn_3d/lib/python3.9/site-packages/keras/src/layers/normalization/batch_normalization.py:883: _colocate_with (from tensorflow.python.framework.ops) is deprecated and will be removed in a future version.
+Instructions for updating:
+Colocations handled automatically by placer.
+WARNING:tensorflow:From /home/satvik/miniconda3/envs/cgn_3d/lib/python3.9/site-packages/tensorflow/python/util/deprecation.py:660: calling conv1d (from tensorflow.python.ops.nn_ops) with data_format=NHWC is deprecated and will be removed in a future version.
+Instructions for updating:
+`NHWC` for data_format is deprecated, use `NWC` instead
+WARNING:tensorflow:From /home/satvik/miniconda3/envs/cgn_3d/lib/python3.9/site-packages/tensorflow/python/util/dispatch.py:1260: calling dropout (from tensorflow.python.ops.nn_ops) with keep_prob is deprecated and will be removed in a future version.
+Instructions for updating:
+Please use `rate` instead of `keep_prob`. Rate should be set to `rate = 1 - keep_prob`.
+grasp label device:  /cpu:0
+WARNING:tensorflow:From /NAS_DISK/BS2026/satvik/CGN_3D_TF213/contact_graspnet/tf_train_ops.py:101: DatasetV1.make_initializable_iterator (from tensorflow.python.data.ops.dataset_ops) is deprecated and will be removed in a future version.
+Instructions for updating:
+This is a deprecated API that should only be used in TF 1 graph mode and legacy TF 2 graph mode available through `tf.compat.v1`. In all other situations -- namely, eager mode and inside `tf.function` -- you can consume dataset elements using `for elem in dataset: ...` or by explicitly creating iterator via `iterator = iter(dataset)` and fetching its elements via `values = next(iterator)`. Furthermore, this API is not available in TF 2. During the transition from TF 1 to TF 2 you can use `tf.compat.v1.data.make_initializable_iterator(dataset)` to create a TF 1 graph mode style iterator for a dataset created through TF 2 APIs. Note that this should be a transient state of your code base as there are in general no guarantees about the interoperability of TF 1 and TF 2 code.
+2026-10-25 17:15:19.161074: I tensorflow/core/common_runtime/gpu/gpu_device.cc:1929] Created device /job:localhost/replica:0/task:0/device:GPU:0 with 38458 MB memory:  -> device: 0, name: NVIDIA A100-PCIE-40GB, pci bus id: 0000:3b:00.0, compute capability: 8.0
+2026-10-25 17:15:19.346524: I tensorflow/compiler/mlir/mlir_graph_optimization_pass.cc:388] MLIR V1 optimization pass is not enabled
+2026-10-25 17:15:24.278005: I external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:454] Loaded cuDNN version 8904
+intermediate tensor=layer1/GatherPoint:0 op_type=GatherPoint gradient_finite=False
+intermediate tensor=layer1/GroupPoint:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer1/conv0_0/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv0_0/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv0_0/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv0_0/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_0/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/conv0_1/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv0_1/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv0_1/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv0_1/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_1/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/conv0_2/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv0_2/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv0_2/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv0_2/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv0_2/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/Max:0 op_type=Max gradient_finite=False
+intermediate tensor=layer1/GroupPoint_1:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer1/conv1_0/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv1_0/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv1_0/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv1_0/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_0/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/conv1_1/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv1_1/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv1_1/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv1_1/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_1/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/conv1_2/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv1_2/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv1_2/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv1_2/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv1_2/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/Max_1:0 op_type=Max gradient_finite=False
+intermediate tensor=layer1/GroupPoint_2:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer1/conv2_0/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv2_0/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv2_0/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv2_0/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_0/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/conv2_1/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv2_1/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv2_1/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv2_1/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_1/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/conv2_2/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer1/conv2_2/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer1/conv2_2/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer1/conv2_2/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer1/conv2_2/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer1/Max_2:0 op_type=Max gradient_finite=False
+intermediate tensor=layer1/concat:0 op_type=ConcatV2 gradient_finite=False
+intermediate tensor=layer2/GatherPoint:0 op_type=GatherPoint gradient_finite=False
+intermediate tensor=layer2/GroupPoint:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer2/GroupPoint_1:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer2/concat:0 op_type=ConcatV2 gradient_finite=False
+intermediate tensor=layer2/conv0_0/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv0_0/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv0_0/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv0_0/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_0/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/conv0_1/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv0_1/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv0_1/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv0_1/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_1/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/conv0_2/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv0_2/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv0_2/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv0_2/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv0_2/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/Max:0 op_type=Max gradient_finite=False
+intermediate tensor=layer2/GroupPoint_2:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer2/GroupPoint_3:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer2/concat_1:0 op_type=ConcatV2 gradient_finite=False
+intermediate tensor=layer2/conv1_0/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv1_0/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv1_0/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv1_0/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_0/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/conv1_1/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv1_1/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv1_1/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv1_1/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_1/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/conv1_2/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv1_2/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv1_2/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv1_2/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv1_2/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/Max_1:0 op_type=Max gradient_finite=False
+intermediate tensor=layer2/GroupPoint_4:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer2/GroupPoint_5:0 op_type=GroupPoint gradient_finite=False
+intermediate tensor=layer2/concat_2:0 op_type=ConcatV2 gradient_finite=False
+intermediate tensor=layer2/conv2_0/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv2_0/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv2_0/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv2_0/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_0/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/conv2_1/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv2_1/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv2_1/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv2_1/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_1/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/conv2_2/Conv2D:0 op_type=Conv2D gradient_finite=False
+intermediate tensor=layer2/conv2_2/BiasAdd:0 op_type=BiasAdd gradient_finite=False
+intermediate tensor=layer2/conv2_2/bn/cond:0 op_type=If gradient_finite=False
+intermediate tensor=layer2/conv2_2/bn/cond/Identity:0 op_type=Identity gradient_finite=False
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_1:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_2:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_3:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_4:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_5:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_6:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_7:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_8:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond/Identity_9:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond_1:0 op_type=StatelessIf gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/bn/cond_1/Identity:0 op_type=Identity gradient_finite=undefined
+intermediate tensor=layer2/conv2_2/Relu:0 op_type=Relu gradient_finite=False
+intermediate tensor=layer2/Max_2:0 op_type=Max gradient_finite=False
+intermediate tensor=layer2/concat_3:0 op_type=ConcatV2 gradient_finite=False
+bisection_loss=nan
+closest_output_nonfinite_gradient=layer2/concat_3:0 (ConcatV2)
+last_finite_gradient_toward_input=none

@@ -1,5 +1,6 @@
 import os
 import sys
+from dataclasses import dataclass
 import numpy as np
 import open3d as o3d
 import argparse
@@ -20,6 +21,176 @@ import plotly.graph_objects as go
 # ----------------------------------------------------------------------------
 # Gripper geometry
 # ----------------------------------------------------------------------------
+_GRIPPER_OPEN_STL_PATH = os.path.join(BASE_DIR, 'gripper_models', '2_finger_open.stl')
+_GRIPPER_ASSET_SCALE = 0.001
+_GRIPPER_CONTACT_ANCHOR_MM = np.array(
+    [-66.17023086547852, 129.4645538330078, 23.87684440612793],
+    dtype=np.float64,
+)
+_GRIPPER_OPPOSITE_CONTACT_MM = np.array(
+    [23.380385398864746, 129.88703536987305, 23.87684440612793],
+    dtype=np.float64,
+)
+_GRIPPER_FIXED_OPENING_M = 0.09
+_GRIPPER_ASSET_OPENING_M = float(
+    np.linalg.norm(_GRIPPER_OPPOSITE_CONTACT_MM - _GRIPPER_CONTACT_ANCHOR_MM)
+    * _GRIPPER_ASSET_SCALE
+)
+_CGN_GRIPPER_DEPTH_M = 0.1034
+_GRIPPER_SOURCE_TO_CGN = np.array([
+    [1.0, 0.0, 0.0],
+    [0.0, 0.0, -1.0],
+    [0.0, 1.0, 0.0],
+], dtype=np.float64)
+_GRIPPER_DISPLAY_POINT_LIMIT = 2500
+
+
+@dataclass(frozen=True)
+class GripperModel:
+    collision_points_local: np.ndarray
+    display_points_local: np.ndarray
+    mesh_vertices_local: np.ndarray
+    mesh_faces: np.ndarray
+
+
+def load_gripper_model():
+    """Load and validate the open, maximum-width custom gripper model."""
+    if not os.path.isfile(_GRIPPER_OPEN_STL_PATH):
+        raise FileNotFoundError(
+            f"Required custom gripper asset is missing: {_GRIPPER_OPEN_STL_PATH}"
+        )
+
+    import trimesh
+
+    mesh = trimesh.load(_GRIPPER_OPEN_STL_PATH, force='mesh')
+    if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+        raise ValueError(
+            f"Custom gripper STL contains no triangle mesh: {_GRIPPER_OPEN_STL_PATH}"
+        )
+
+    mesh_vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    mesh_triangles = np.asarray(mesh.triangles, dtype=np.float64)
+    mesh_faces = np.asarray(mesh.faces, dtype=np.int64)
+    if (mesh_vertices.ndim != 2 or mesh_vertices.shape[1] != 3
+            or mesh_faces.ndim != 2 or mesh_faces.shape[1] != 3
+            or len(mesh_faces) == 0
+            or not np.all(np.isfinite(mesh_vertices))
+            or not np.all(np.isfinite(mesh_triangles))
+            or mesh_faces.min() < 0 or mesh_faces.max() >= len(mesh_vertices)):
+        raise ValueError("Custom gripper STL contains malformed or non-finite geometry.")
+
+    for contact_point, expected_normal in (
+        (_GRIPPER_CONTACT_ANCHOR_MM, np.array([1.0, 0.0, 0.0])),
+        (_GRIPPER_OPPOSITE_CONTACT_MM, np.array([-1.0, 0.0, 0.0])),
+    ):
+        closest_points = trimesh.triangles.closest_point(
+            mesh_triangles,
+            np.broadcast_to(contact_point, (len(mesh_triangles), 3)),
+        )
+        distances = np.linalg.norm(closest_points - contact_point, axis=1)
+        face_index = int(np.argmin(distances))
+        face_normal = np.asarray(mesh.face_normals[face_index], dtype=np.float64)
+        if (distances[face_index] > 0.1
+                or not np.all(np.isfinite(face_normal))
+                or np.dot(face_normal, expected_normal) < 0.95):
+            raise ValueError(
+                "Configured maximum-opening contact point does not match its "
+                f"expected fingertip face in {_GRIPPER_OPEN_STL_PATH}."
+            )
+
+    determinant = float(np.linalg.det(_GRIPPER_SOURCE_TO_CGN))
+    if (not np.allclose(
+            _GRIPPER_SOURCE_TO_CGN.T @ _GRIPPER_SOURCE_TO_CGN,
+            np.eye(3),
+            atol=1e-8,
+        ) or not np.isclose(determinant, 1.0, atol=1e-8)):
+        raise ValueError("Custom gripper axis mapping must be a right-handed rotation.")
+
+    opening_vector_local = (
+        _GRIPPER_SOURCE_TO_CGN
+        @ (_GRIPPER_OPPOSITE_CONTACT_MM - _GRIPPER_CONTACT_ANCHOR_MM)
+        * _GRIPPER_ASSET_SCALE
+    )
+    if (not np.isclose(
+            _GRIPPER_ASSET_OPENING_M,
+            _GRIPPER_FIXED_OPENING_M,
+            atol=0.001,
+            rtol=0.0,
+        ) or np.linalg.norm(opening_vector_local[1:]) > 0.001):
+        raise ValueError(
+            "Measured open-STL jaw contact separation "
+            f"({_GRIPPER_ASSET_OPENING_M * 1000:.2f} mm) does not match the "
+            f"configured maximum opening ({_GRIPPER_FIXED_OPENING_M * 1000:.1f} mm) "
+            "along the CGN closing axis."
+        )
+
+    source_hull = mesh.convex_hull
+    if len(source_hull.vertices) < 4:
+        raise ValueError("Custom gripper STL does not enclose a 3D collision volume.")
+
+    anchor_m = _GRIPPER_CONTACT_ANCHOR_MM * _GRIPPER_ASSET_SCALE
+
+    def to_grasp_local(source_points):
+        centered = (np.asarray(source_points, dtype=np.float64) * _GRIPPER_ASSET_SCALE
+                    - anchor_m)
+        return (_GRIPPER_SOURCE_TO_CGN @ centered.T).T
+
+    display_count = min(len(mesh_vertices), _GRIPPER_DISPLAY_POINT_LIMIT)
+    if display_count < len(mesh_vertices):
+        rng = np.random.default_rng(0)
+        display_indices = np.sort(
+            rng.choice(len(mesh_vertices), display_count, replace=False)
+        )
+        display_points = mesh_vertices[display_indices]
+    else:
+        display_points = mesh_vertices
+
+    print(
+        "Loaded custom gripper: "
+        f"{len(source_hull.vertices)} STL hull vertices for table checks, "
+        f"{display_count} STL points for Plotly, "
+        f"{_GRIPPER_ASSET_OPENING_M * 1000:.2f} mm measured maximum opening."
+    )
+    print(
+        "Table clearance and Mayavi use the supplied open STL; predicted grasp "
+        "widths are not used to articulate or reject this maximum-opening model."
+    )
+    return GripperModel(
+        collision_points_local=to_grasp_local(np.asarray(source_hull.vertices)),
+        display_points_local=to_grasp_local(display_points),
+        mesh_vertices_local=to_grasp_local(mesh_vertices),
+        mesh_faces=mesh_faces,
+    )
+
+
+def _world_gripper_points(gripper_points_local, grasp_rotation, contact_point,
+                          approach_offset=0.0):
+    point = np.asarray(contact_point, dtype=np.float64)
+    rotation = np.asarray(grasp_rotation, dtype=np.float64)
+    if point.shape != (3,) or rotation.shape != (3, 3):
+        raise ValueError("Gripper transform requires a 3-vector contact and 3x3 rotation.")
+    if not np.all(np.isfinite(point)) or not np.all(np.isfinite(rotation)):
+        raise ValueError("Gripper transform contains non-finite values.")
+    translation = point - approach_offset * rotation[:, 2]
+    return (rotation @ gripper_points_local.T).T + translation
+
+
+def _minimum_gripper_plane_clearance(gripper_model, grasp_rotation, contact_point,
+                                     table_normal, table_d, standoff=0.0):
+    points_final = _world_gripper_points(
+        gripper_model.collision_points_local, grasp_rotation, contact_point
+    )
+    final_clearance = float((points_final @ table_normal + table_d).min())
+    if standoff <= 0:
+        return final_clearance
+    points_standoff = _world_gripper_points(
+        gripper_model.collision_points_local, grasp_rotation, contact_point,
+        approach_offset=standoff,
+    )
+    standoff_clearance = float((points_standoff @ table_normal + table_d).min())
+    return min(final_clearance, standoff_clearance)
+
+
 def get_gripper_geometry():
     # SET THESE TO YOUR CUSTOM GRIPPER'S REAL DIMENSIONS
     w = 0.08    # max opening width (meters), center-to-center of finger pads
@@ -335,11 +506,13 @@ def validate_floor_plane(table_normal, table_d, table_points=None, is_virtual=Fa
 # ----------------------------------------------------------------------------
 def filter_table_colliding_grasps(pred_grasps_cam, scores, contact_pts, gripper_openings,
                                    table_normal, table_d, min_clearance=0.005, standoff=0.10,
-                                   contact_pairs=None):
+                                   contact_pairs=None, gripper_model=None):
     """
-    Rejects any grasp where the gripper's own geometry -- at the final grasp
-    pose, OR while retreating 'standoff' meters back along its approach axis --
-    would come closer than min_clearance to the table plane.
+    Rejects grasps whose geometry at the final pose or approach standoff falls
+    below the requested clearance from the table plane.
+
+    When gripper_model is supplied, its STL-derived convex hull is checked;
+    support against a plane is exact for the hull of the mesh vertices.
     """
     control_points = gripper_control_points_array()
 
@@ -352,18 +525,47 @@ def filter_table_colliding_grasps(pred_grasps_cam, scores, contact_pts, gripper_
         obj_contacts = contact_pts.get(obj_id, None)
         obj_widths = gripper_openings.get(obj_id, None) if gripper_openings is not None else None
         obj_pairs = contact_pairs.get(obj_id, None) if contact_pairs is not None else None
+        if gripper_model is not None:
+            if np.asarray(obj_scores).shape != (len(grasps),):
+                raise ValueError(f"Object {obj_id}: grasp scores are not aligned with grasp poses.")
+            if obj_contacts is None or np.asarray(obj_contacts).shape != (len(grasps), 3):
+                raise ValueError(
+                    f"Object {obj_id}: custom gripper collision checks require one "
+                    "contact point per grasp."
+                )
+            if not np.all(np.isfinite(obj_contacts)):
+                raise ValueError(f"Object {obj_id}: grasp contact points contain non-finite values.")
+            if obj_widths is None or np.asarray(obj_widths).shape != (len(grasps),):
+                raise ValueError(
+                    f"Object {obj_id}: predicted openings are not aligned with grasp poses."
+                )
+            if not np.all(np.isfinite(obj_widths)):
+                raise ValueError(
+                    f"Object {obj_id}: predicted gripper openings contain non-finite values."
+                )
 
         keep_idx = []
         for i, g in enumerate(grasps):
             R, t = g[:3, :3], g[:3, 3]
 
-            pts_world = (R @ control_points.T).T + t
-            if (pts_world @ table_normal + table_d).min() < min_clearance:
-                continue
+            if gripper_model is not None:
+                clearance = _minimum_gripper_plane_clearance(
+                    gripper_model, R, obj_contacts[i], table_normal, table_d,
+                    standoff=standoff,
+                )
+                if clearance < min_clearance:
+                    continue
+            else:
+                pts_world = (R @ control_points.T).T + t
+                if (pts_world @ table_normal + table_d).min() < min_clearance:
+                    continue
 
-            approach_dir = R[:, 2]
-            pts_standoff = (R @ control_points.T).T + (t - standoff * approach_dir)
-            if (pts_standoff @ table_normal + table_d).min() < min_clearance:
+                approach_dir = R[:, 2]
+                pts_standoff = (R @ control_points.T).T + (t - standoff * approach_dir)
+                if (pts_standoff @ table_normal + table_d).min() < min_clearance:
+                    continue
+
+            if not np.isfinite(obj_scores[i]):
                 continue
 
             keep_idx.append(i)
@@ -395,7 +597,9 @@ def _rotation_about_local_x(theta):
 
 def resolve_floor_collisions_by_rotation(pred_grasps_cam, table_normal, table_d,
                                           min_clearance=0.005, standoff=0.10,
-                                          max_angle_deg=180.0, angle_step_deg=0.5):
+                                          max_angle_deg=180.0, angle_step_deg=0.5,
+                                          contact_pts=None, gripper_openings=None,
+                                          gripper_model=None):
     """
     For any grasp whose gripper geometry collides with the floor plane, tilts
     the gripper by rotating about its OWN local x-axis (the baseline/closing
@@ -406,7 +610,12 @@ def resolve_floor_collisions_by_rotation(pred_grasps_cam, table_normal, table_d,
     control_points = gripper_control_points_array()
     angles = np.arange(angle_step_deg, max_angle_deg + 1e-6, angle_step_deg)
 
-    def min_clearance_for(R, t):
+    def min_clearance_for(R, t, contact_point):
+        if gripper_model is not None:
+            return _minimum_gripper_plane_clearance(
+                gripper_model, R, contact_point, table_normal, table_d,
+                standoff=standoff,
+            )
         pts_world = (R @ control_points.T).T + t
         c_final = (pts_world @ table_normal + table_d).min()
         approach_dir = R[:, 2]
@@ -417,12 +626,33 @@ def resolve_floor_collisions_by_rotation(pred_grasps_cam, table_normal, table_d,
     adjusted_grasps = {}
     for obj_id, grasps in pred_grasps_cam.items():
         grasps_out = grasps.copy() if len(grasps) else grasps
+        obj_contacts = contact_pts.get(obj_id) if contact_pts is not None else None
+        obj_widths = gripper_openings.get(obj_id) if gripper_openings is not None else None
+        if gripper_model is not None:
+            if obj_contacts is None or np.asarray(obj_contacts).shape != (len(grasps), 3):
+                raise ValueError(
+                    f"Object {obj_id}: custom gripper collision resolution requires "
+                    "one contact point per grasp."
+                )
+            if not np.all(np.isfinite(obj_contacts)):
+                raise ValueError(f"Object {obj_id}: grasp contact points contain non-finite values.")
+            if obj_widths is None or np.asarray(obj_widths).shape != (len(grasps),):
+                raise ValueError(
+                    f"Object {obj_id}: custom gripper rotation resolution requires one "
+                    "predicted opening per grasp."
+                )
+            if not np.all(np.isfinite(obj_widths)):
+                raise ValueError(
+                    f"Object {obj_id}: predicted gripper openings contain non-finite values."
+                )
+
         n_ok, n_adjusted, n_unresolved = 0, 0, 0
 
         for i, g in enumerate(grasps):
             R, t = g[:3, :3], g[:3, 3]
+            contact_point = obj_contacts[i] if obj_contacts is not None else None
 
-            if min_clearance_for(R, t) >= min_clearance:
+            if min_clearance_for(R, t, contact_point) >= min_clearance:
                 n_ok += 1
                 continue
 
@@ -430,8 +660,14 @@ def resolve_floor_collisions_by_rotation(pred_grasps_cam, table_normal, table_d,
             for deg in angles:
                 for sign in (1, -1):
                     R_test = R @ _rotation_about_local_x(np.radians(sign * deg))
-                    if min_clearance_for(R_test, t) >= min_clearance:
+                    if min_clearance_for(R_test, t, contact_point) >= min_clearance:
                         grasps_out[i, :3, :3] = R_test
+                        if gripper_model is not None:
+                            grasps_out[i, :3, 3] = (
+                                contact_point
+                                + 0.5 * obj_widths[i] * R_test[:, 0]
+                                - _CGN_GRIPPER_DEPTH_M * R_test[:, 2]
+                            )
                         resolved = True
                         n_adjusted += 1
                         break
@@ -499,7 +735,8 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
                      vis_floor_normal=None, vis_floor_d=None,
                      table_inlier_points=None,
                      require_all_points_above_z0=True,
-                     top_n=-1, show_plane=False, camera_location=None):
+                     top_n=-1, show_plane=False, camera_location=None,
+                     gripper_contact_pts=None, gripper_model=None):
     print(f"Exporting 3D scene to {out_path}...")
 
     if len(pc) == 0:
@@ -579,6 +816,8 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
 
     gripper_lines = get_gripper_geometry()
     ctrl_pts = gripper_control_points_array()
+    if gripper_contact_pts is None:
+        gripper_contact_pts = {}
 
     for obj_id in pred_grasps_cam.keys():
         grasps = pred_grasps_cam[obj_id]
@@ -587,6 +826,15 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
 
         obj_scores = scores[obj_id]
         obj_pairs = contact_pairs.get(obj_id, None) if contact_pairs is not None else None
+        obj_gripper_contacts = gripper_contact_pts.get(obj_id)
+        if gripper_model is not None and (
+            obj_gripper_contacts is None
+            or np.asarray(obj_gripper_contacts).shape != (len(grasps), 3)
+        ):
+            raise ValueError(
+                f"Object {obj_id}: custom gripper visualization requires one contact "
+                "point per grasp."
+            )
         sorted_indices = np.argsort(obj_scores)[::-1]
 
         n_total = len(grasps)
@@ -602,13 +850,25 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
 
             g = grasps[idx]
             R_g, t_g = g[:3, :3], g[:3, 3]
-            pts_world = (R_g @ ctrl_pts.T).T + t_g
+            if gripper_model is not None:
+                pts_world = _world_gripper_points(
+                    gripper_model.collision_points_local, R_g,
+                    obj_gripper_contacts[idx],
+                )
+            else:
+                pts_world = (R_g @ ctrl_pts.T).T + t_g
 
             if vis_floor_normal is not None and vis_floor_d is not None:
                 if (pts_world @ vis_floor_normal + vis_floor_d).min() < min_clearance:
                     continue
-                approach_dir = R_g[:, 2]
-                pts_standoff = (R_g @ ctrl_pts.T).T + (t_g - standoff * approach_dir)
+                if gripper_model is not None:
+                    pts_standoff = _world_gripper_points(
+                        gripper_model.collision_points_local, R_g,
+                        obj_gripper_contacts[idx], approach_offset=standoff,
+                    )
+                else:
+                    approach_dir = R_g[:, 2]
+                    pts_standoff = (R_g @ ctrl_pts.T).T + (t_g - standoff * approach_dir)
                 if (pts_standoff @ vis_floor_normal + vis_floor_d).min() < min_clearance:
                     continue
             n_floor_clear += 1
@@ -622,12 +882,26 @@ def export_3d_scene(pc, pc_colors, pred_grasps_cam, scores, contact_pairs,
 
             color = 'red' if n_shown == 0 else 'green'
 
-            trans_lines = transform_lines(gripper_lines, g)
-            for line in trans_lines:
+            if gripper_model is not None:
+                gripper_display = _world_gripper_points(
+                    gripper_model.display_points_local, R_g,
+                    obj_gripper_contacts[idx],
+                )
                 fig.add_trace(go.Scatter3d(
-                    x=[line[0][0], line[1][0]], y=[line[0][1], line[1][1]], z=[line[0][2], line[1][2]],
-                    mode='lines', line=dict(color=color, width=5), showlegend=False, hoverinfo='skip'
+                    x=gripper_display[:, 0], y=gripper_display[:, 1], z=gripper_display[:, 2],
+                    mode='markers',
+                    marker=dict(color='orange', size=2, opacity=0.85),
+                    name='Custom gripper',
+                    showlegend=n_shown == 0,
+                    hoverinfo='skip',
                 ))
+            else:
+                trans_lines = transform_lines(gripper_lines, g)
+                for line in trans_lines:
+                    fig.add_trace(go.Scatter3d(
+                        x=[line[0][0], line[1][0]], y=[line[0][1], line[1][1]], z=[line[0][2], line[1][2]],
+                        mode='lines', line=dict(color=color, width=5), showlegend=False, hoverinfo='skip'
+                    ))
 
             if obj_pairs is not None and len(obj_pairs) > idx:
                 c1, c2 = obj_pairs[idx][0], obj_pairs[idx][1]
@@ -756,7 +1030,8 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
                       vis_floor_normal=None, vis_floor_d=None,
                       require_all_points_above_z0=True, top_n=-1,
                       show_both_contacts=True, pc_colors=None, mesh=False, bpa=False,
-                      camera_location=None):
+                      camera_location=None, gripper_contact_pts=None,
+                      gripper_model=None):
     """Open an interactive Mayavi view of the RGB scene and filtered grasps.
 
     Mayavi is imported here rather than at module import time, so the normal
@@ -812,21 +1087,44 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
 
     gripper_lines = get_gripper_geometry()
     ctrl_pts = gripper_control_points_array()
+    if gripper_contact_pts is None:
+        gripper_contact_pts = {}
     n_shown = 0
     for obj_id, grasps in pred_grasps_cam.items():
         if len(grasps) == 0:
             continue
+        obj_gripper_contacts = gripper_contact_pts.get(obj_id)
+        if gripper_model is not None and (
+            obj_gripper_contacts is None
+            or np.asarray(obj_gripper_contacts).shape != (len(grasps), 3)
+        ):
+            raise ValueError(
+                f"Object {obj_id}: custom gripper visualization requires one contact "
+                "point per grasp."
+            )
         n_shown_for_object = 0
         for idx in np.argsort(scores[obj_id])[::-1]:
             if scores[obj_id][idx] < score_threshold:
                 continue
             g = grasps[idx]
-            pts_world = (g[:3, :3] @ ctrl_pts.T).T + g[:3, 3]
+            if gripper_model is not None:
+                pts_world = _world_gripper_points(
+                    gripper_model.collision_points_local, g[:3, :3],
+                    obj_gripper_contacts[idx],
+                )
+            else:
+                pts_world = (g[:3, :3] @ ctrl_pts.T).T + g[:3, 3]
             if vis_floor_normal is not None and vis_floor_d is not None:
                 if (pts_world @ vis_floor_normal + vis_floor_d).min() < min_clearance:
                     continue
-                approach_dir = g[:3, 2]
-                pts_standoff = (g[:3, :3] @ ctrl_pts.T).T + (g[:3, 3] - standoff * approach_dir)
+                if gripper_model is not None:
+                    pts_standoff = _world_gripper_points(
+                        gripper_model.collision_points_local, g[:3, :3],
+                        obj_gripper_contacts[idx], approach_offset=standoff,
+                    )
+                else:
+                    approach_dir = g[:3, 2]
+                    pts_standoff = (g[:3, :3] @ ctrl_pts.T).T + (g[:3, 3] - standoff * approach_dir)
                 if (pts_standoff @ vis_floor_normal + vis_floor_d).min() < min_clearance:
                     continue
             if require_all_points_above_z0 and pts_world[:, 2].min() < 0.0:
@@ -835,10 +1133,24 @@ def show_mayavi_scene(pc, pred_grasps_cam, scores, contact_pairs,
                 continue
 
             color = (1.0, 0.0, 0.0) if n_shown_for_object == 0 else (0.0, 0.9, 0.1)
-            for line in transform_lines(gripper_lines, g):
-                line = np.asarray(line)
-                mlab.plot3d(line[:, 0], line[:, 1], line[:, 2], color=color,
-                            tube_radius=0.0015, tube_sides=12)
+            if gripper_model is not None:
+                gripper_mesh_world = _world_gripper_points(
+                    gripper_model.mesh_vertices_local, g[:3, :3],
+                    obj_gripper_contacts[idx],
+                )
+                mlab.triangular_mesh(
+                    gripper_mesh_world[:, 0],
+                    gripper_mesh_world[:, 1],
+                    gripper_mesh_world[:, 2],
+                    gripper_model.mesh_faces,
+                    color=(1.0, 0.55, 0.05),
+                    opacity=0.9,
+                )
+            else:
+                for line in transform_lines(gripper_lines, g):
+                    line = np.asarray(line)
+                    mlab.plot3d(line[:, 0], line[:, 1], line[:, 2], color=color,
+                                tube_radius=0.0015, tube_sides=12)
 
             obj_pairs = contact_pairs.get(obj_id) if contact_pairs is not None else None
             if obj_pairs is not None and len(obj_pairs) > idx:
@@ -905,6 +1217,7 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
         print("Point cloud is empty!")
         return
 
+    gripper_model = load_gripper_model()
     full_points, full_colors = points, colors
     table_inlier_points = None
 
@@ -1039,6 +1352,26 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
         filter_grasps=True, forward_passes=1
     )
 
+    for obj_id, grasps in pred_grasps_cam.items():
+        grasp_count = len(grasps)
+        score_values = np.asarray(scores[obj_id])
+        contact_values = np.asarray(contact_pts[obj_id])
+        opening_values = np.asarray(gripper_openings[obj_id])
+        expected_sizes = (
+            (score_values, grasp_count, "scores"),
+            (contact_values, grasp_count * 3, "contact points"),
+            (opening_values, grasp_count, "predicted openings"),
+        )
+        for array, expected_size, label in expected_sizes:
+            if array.size != expected_size:
+                raise ValueError(
+                    f"Object {obj_id}: expected {expected_size} values for {label} "
+                    f"across {grasp_count} grasps, got shape {array.shape}."
+                )
+        scores[obj_id] = score_values.reshape(grasp_count)
+        contact_pts[obj_id] = contact_values.reshape(grasp_count, 3)
+        gripper_openings[obj_id] = opening_values.reshape(grasp_count)
+
     for obj_id in scores:
         print(f"Object {obj_id}: {np.sum(scores[obj_id] > score_threshold)} grasps above "
               f"{score_threshold} ({len(scores[obj_id])} total predicted)")
@@ -1058,12 +1391,15 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
             min_clearance=HARD_COLLISION_THRESH,   # negative: only reject deeply buried grasps
             standoff=standoff,
             contact_pairs=contact_pairs,
+            gripper_model=gripper_model,
         )
 
         # ---- Step 2: for grasps that only slightly clip the table, try tilting them clear.
         pred_grasps_cam = resolve_floor_collisions_by_rotation(
             pred_grasps_cam, table_normal, table_d,
-            min_clearance=min_clearance, standoff=standoff
+            min_clearance=min_clearance, standoff=standoff,
+            contact_pts=contact_pts, gripper_openings=gripper_openings,
+            gripper_model=gripper_model,
         )
         # Rotation may fail to resolve a collision. Never save those grasps as
         # if they were safe; recheck final pose and approach clearance together.
@@ -1075,6 +1411,7 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
             min_clearance=min_clearance,
             standoff=standoff,
             contact_pairs=contact_pairs,
+            gripper_model=gripper_model,
         )
         print("Applied final table-clearance validation after rotation correction.")
     else:
@@ -1123,9 +1460,25 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                  table_collision_checked=np.array(
                      [r['collision_checked'] for r in grasp_pose_records], dtype=bool
                  ),
-                 minimum_table_clearance_m=np.array(min_clearance, dtype=np.float64))
+                 minimum_table_clearance_m=np.array(min_clearance, dtype=np.float64),
+                 gripper_width_checked=np.array(False, dtype=bool),
+                 predicted_gripper_width_checked=np.array(False, dtype=bool),
+                 fixed_gripper_opening_m=np.array(
+                     _GRIPPER_FIXED_OPENING_M, dtype=np.float64
+                 ),
+                 gripper_asset_measured_opening_m=np.array(
+                     _GRIPPER_ASSET_OPENING_M, dtype=np.float64
+                 ),
+                 collision_gripper_model=np.array(os.path.basename(_GRIPPER_OPEN_STL_PATH)),
+                 gripper_asset_scale_m_per_unit=np.array(
+                     _GRIPPER_ASSET_SCALE, dtype=np.float64
+                 ),
+                 gripper_contact_anchor_source_mm=_GRIPPER_CONTACT_ANCHOR_MM.copy(),
+                 gripper_opposite_contact_source_mm=_GRIPPER_OPPOSITE_CONTACT_MM.copy(),
+                 gripper_source_to_cgn=_GRIPPER_SOURCE_TO_CGN.copy())
         print(f"Saved {len(grasp_pose_records)} grasp pose(s) (R, t) to {poses_out_path}; "
-              f"table collision checked: {floor_is_solid}.")
+              f"open STL table collision checked: {floor_is_solid}; "
+              "predicted jaw widths were not checked.")
 
     z_offset = -full_points[:, 2].min()
     shift = np.array([0.0, 0.0, z_offset])
@@ -1136,6 +1489,8 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
         if len(pred_grasps_cam[obj_id]):
             pred_grasps_cam[obj_id] = pred_grasps_cam[obj_id].copy()
             pred_grasps_cam[obj_id][:, :3, 3] += shift
+        if len(contact_pts.get(obj_id, [])):
+            contact_pts[obj_id] = contact_pts[obj_id] + shift
         if contact_pairs.get(obj_id) is not None and len(contact_pairs[obj_id]):
             contact_pairs[obj_id] = contact_pairs[obj_id] + shift
     print(f"Shifted visualization by {z_offset:.4f} m along z so object rests at z=0 (grasp generation used original depth).")
@@ -1152,7 +1507,8 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                      table_inlier_points=table_inlier_points,
                      require_all_points_above_z0=True,
                      top_n=top_n, show_plane=show_plane,
-                     camera_location=shift)
+                     camera_location=shift,
+                     gripper_contact_pts=contact_pts, gripper_model=gripper_model)
     if mayavi:
         show_mayavi_scene(full_points, pred_grasps_cam, scores, contact_pairs,
                           score_threshold=score_threshold, min_clearance=min_clearance,
@@ -1160,7 +1516,8 @@ def process_pcd_scene(sess, grasp_estimator, pcd, eps=0.02, min_points=30,
                           vis_floor_d=vis_floor_d, require_all_points_above_z0=True,
                           top_n=top_n, show_both_contacts=show_both_contacts,
                           pc_colors=full_colors, mesh=mesh, bpa=bpa,
-                          camera_location=shift)
+                          camera_location=shift,
+                          gripper_contact_pts=contact_pts, gripper_model=gripper_model)
 
 
 def process_ply_scene(sess, grasp_estimator, ply_path, eps=0.02, min_points=30,
